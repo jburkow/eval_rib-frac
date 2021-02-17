@@ -271,6 +271,32 @@ def calc_kappa_fr(true_pos, false_pos, false_neg):
     Returns
     -------
     fr_kappa : float
-        Free-response kappa for the dataset
+        Free-response Kappa for the dataset
     """
-    return (2 * true_pos) / (false_pos + false_neg + 2 * true_pos)
+    # Calculate the free-response Kappa
+    fr_kappa = (2 * true_pos) / (false_pos + false_neg + 2 * true_pos)
+
+    return fr_kappa
+
+def calc_bbox_area(box):
+    """
+    Calculates the pixel area of the bounding box.
+
+    Parameters
+    ----------
+    box : list, [x1, y1, x2, y2]
+        the annotated/predicted bounding box
+
+    Returns
+    -------
+    bbox_area : int
+        area of the bounding box
+    """
+    # Calculate height and width of the bounding box
+    bbox_height = box[3] - box[1]
+    bbox_width = box[2] - box[0]
+
+    # Calculate area of the bounding box
+    bbox_area = bbox_height * bbox_width
+
+    return bbox_area
