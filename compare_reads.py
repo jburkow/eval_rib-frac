@@ -2,7 +2,7 @@
 Filename: compare_reads.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 02/10/2021
+Last Updated: 02/20/2021
 Description: Goes through two separate radiologist read annotation files
     and either creates images with annotations drawn on, or calculates
     a Kappa metric across the dataset.
@@ -16,7 +16,8 @@ import pandas as pd
 import cv2
 from args import ARGS
 from general_utils import print_iter
-from eval_utils import draw_box, draw_caption, get_bounding_boxes, calc_performance, calc_cohens, calc_kappa_fr, calc_bbox_area, intersection_over_union
+from eval_utils import (draw_box, get_bounding_boxes, calc_performance, calc_cohens, calc_kappa_fr,
+                        calc_bbox_area, intersection_over_union)
 
 def make_images(first_reads, second_reads):
     """
@@ -30,7 +31,7 @@ def make_images(first_reads, second_reads):
         contains image and bounding box locations from the second radiologist reads
     """
     # Define list of images
-    img_list = [os.path.join(root, file) for root, dirs, files in os.walk(ARGS['8_BIT_OG_IMAGE_FOLDER']) for file in files]
+    img_list = [os.path.join(root, file) for root, _, files in os.walk(ARGS['8_BIT_OG_IMAGE_FOLDER']) for file in files]
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
     for i, img_nm in enumerate(img_list):
@@ -78,7 +79,7 @@ def make_images_from_file(filename, first_reads):
         contains image and bounding box locations from the first radiologist reads
     """
     # Define list of images
-    img_list = [os.path.join(root, file) for root, dirs, files in os.walk(ARGS['8_BIT_OG_IMAGE_FOLDER']) for file in files]
+    img_list = [os.path.join(root, file) for root, _, files in os.walk(ARGS['8_BIT_OG_IMAGE_FOLDER']) for file in files]
 
     # Load in DataFrame from CSV file
     bbox_df = pd.read_csv(filename, names=(['Patient', 'Read1 Box', 'Read1 Area', 'Read2 Box', 'Read2 Area', 'Result', 'Max IOU']))
@@ -131,7 +132,7 @@ def make_images_from_file(filename, first_reads):
 
 def calculate_metrics(first_reads, second_reads, iou_threshold):
     """
-    Calculates Cohen's Kappa across the dataset annotated in both reads.
+    Calculates various performance metrics across the two reads and prints them to console.
 
     Parameters
     ----------
@@ -308,10 +309,10 @@ if __name__ == "__main__":
     parser.add_argument('--type', required=True, choices=['images', 'color_images', 'metrics', 'file'],
                         help='Determine whether to create annotated images or calculate metrics across the dataset.')
 
-    parser.add_argument('--first_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_annotations.csv'),
+    parser.add_argument('--first_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_annotations_crop.csv'),
                         help='Filename to CSV containing first read annotations.')
 
-    parser.add_argument('--second_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read2_annotations.csv'),
+    parser.add_argument('--second_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read2_annotations_crop.csv'),
                         help='Filename to CSV containing second read annotations.')
 
     parser.add_argument('--iou_thresh', type=float, default=0.3,
