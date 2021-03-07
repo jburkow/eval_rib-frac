@@ -2,7 +2,7 @@
 Filename: eval_utils.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 02/03/2021
+Last Updated: 03/06/2021
 Description: Various utility functions used for evaluating performance
     of the model on detection.
 '''
@@ -86,7 +86,7 @@ def draw_caption(image, box, caption, loc=''):
         cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
         cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
-def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None):
+def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False):
     """
     Extracts the bounding box locations of the specific patient from the annotations file.
 
@@ -94,15 +94,19 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None):
     ----------
     patient_nm : str
         name of the image file (patientid_#.png)
-    df : DataFrame
+    anno_df : DataFrame
         DataFrame containing annotation information
     info_loc : str
         path/location of the annotation file
+    has_probs : bool
+        whether or not DataFrame includes probabilities (for model predictions)
 
     Returns
     -------
     boxes : list
         list of lists of bounding box information in the order [x1, y1, x2, y2]
+    probs : list
+        list of probabilities/confidence of model predicted bounding boxes
     """
     # Load in the DL_info.csv file
     if info_loc is not None:
@@ -117,6 +121,15 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None):
     subset_df = frac_info[frac_info['ID'].str.contains(patient_nm[patient_nm.rfind('/')+1:])]
 
     # Extract the window values
+    if has_probs:
+        probs = []
+        for _, row in subset_df.iterrows():
+            boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
+            probs.append(row['Prob'])
+
+        return boxes, probs
+
+    # If no probabilities, just return boxes
     for _, row in subset_df.iterrows():
         boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
 
@@ -214,9 +227,9 @@ def calc_performance(predictions, truths, iou_threshold=0.50):
 
     return true_pos, false_pos, false_neg, ious
 
-def calc_cohens(true_pos, false_pos, false_neg, true_neg):
+def calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy'):
     """
-    Calculate Cohen's Kappa between two reads done by radiologists.
+    Given the values from a confusion matrix, calculate various evaluation metrics.
 
     Parameters
     ----------
@@ -228,55 +241,55 @@ def calc_cohens(true_pos, false_pos, false_neg, true_neg):
         number of false negatives between reads (in read 1 but not 2)
     true_neg : int
         number of true negatives between reads (in neither read 1 or 2)
+    metric : str
+        metric to calculate; acceptable strings:
+        ('accuracy', 'precision', 'positive_predictive_value', 'recall', 'sensitivity', 'f1_score',
+         'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr')
 
-    Returns
-    -------
-    coh_kappa : float
-        Cohen's Kappa value for the two reads
+    Notes
+    -----
+    Wikipedia page for metric names and formulas: https://en.wikipedia.org/wiki/Confusion_matrix
+
+    Free-response Kappa: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/
     """
-    # Sum the total number of events
-    sum_events = float(true_pos + false_pos + false_neg + true_neg)
+    if metric not in ('accuracy', 'precision', 'positive_predictive_value', 'recall', 'sensitivity', 'f1_score',
+                      'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr'):
+        raise ValueError('Unsupported metric string provided in calc_metric: ' + metric)
 
-    # Calculate observed proportionate agreement
-    obs_agree = (true_pos + true_neg) / sum_events
+    if metric == 'accuracy':
+        return (true_pos + true_neg) / float(true_pos + false_pos + false_neg + true_neg)
 
-    # Calculate probability of randomly marking
-    prop_yes = ((true_pos + false_neg) / sum_events) * ((true_pos + false_pos) / sum_events)
+    if metric in ('precision', 'positive_predictive_value'):
+        return true_pos / float(true_pos + false_pos)
 
-    # Calculate probability of randomly not marking
-    prop_no = ((true_neg + false_pos) / sum_events) * ((true_neg + false_neg) / sum_events)
+    if metric in ('recall', 'sensitivity', 'true_positive_rate'):
+        return true_pos / float(true_pos + false_neg)
 
-    # Add prop_yes and prop_no for probability of random agreement
-    prop_e = prop_yes + prop_no
+    if metric == 'f1_score':
+        precision = true_pos / float(true_pos + false_pos)
+        recall = true_pos / float(true_pos + false_neg)
+        return 2 * (precision * recall) / (precision + recall)
 
-    # Calculate Cohen's Kappa
-    coh_kappa = (obs_agree - prop_e) / (1 - prop_e)
+    if metric == 'false_positive_rate':
+        return false_pos / float(false_pos + true_neg)
 
-    return coh_kappa
+    if metric == 'cohens_kappa':
+        # Sum the total number of events
+        sum_events = float(true_pos + false_pos + false_neg + true_neg)
+        # Calculate observed proportionate agreement
+        obs_agree = (true_pos + true_neg) / sum_events
+        # Calculate probability of randomly marking
+        prop_yes = ((true_pos + false_neg) / sum_events) * ((true_pos + false_pos) / sum_events)
+        # Calculate probability of randomly not marking
+        prop_no = ((true_neg + false_pos) / sum_events) * ((true_neg + false_neg) / sum_events)
+        # Add prop_yes and prop_no for probability of random agreement
+        prop_e = prop_yes + prop_no
+        # Calculate Cohen's Kappa
+        coh_kappa = (obs_agree - prop_e) / (1 - prop_e)
+        return coh_kappa
 
-def calc_kappa_fr(true_pos, false_pos, false_neg):
-    """
-    Calculate Free-Reponse Kappa between two reads done by radiologists.
-    Source: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/
-
-    Parameters
-    ----------
-    true_pos : int
-        number of true positives between reads (agreements)
-    false_pos : int
-        number of false positives between reads (in read 2 but not 1)
-    false_neg : int
-        number of false negatives between reads (in read 1 but not 2)
-
-    Returns
-    -------
-    fr_kappa : float
-        Free-response Kappa for the dataset
-    """
-    # Calculate the free-response Kappa
-    fr_kappa = (2 * true_pos) / (false_pos + false_neg + 2 * true_pos)
-
-    return fr_kappa
+    if metric == 'kappa_fr':
+        return 2 * true_pos / float(false_pos + false_neg + 2 * true_pos)
 
 def calc_bbox_area(box):
     """
