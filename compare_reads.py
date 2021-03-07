@@ -127,7 +127,8 @@ def make_images_from_file(filename, first_reads):
         cv2.imwrite(os.path.join(ARGS['COMPARE_READS_IMAGES_COLORED_FOLDER'], patient_id + '.jpg'), img)
     print('') # End print stream from loop
 
-def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=False, model=False, model_conf=None):
+def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=False, model=False,
+                      model_conf=None, save_name=''):
     """
     Calculates various performance metrics across the two reads.
 
@@ -146,6 +147,8 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         whether model predictions are being used as one of the reads (use read2)
     model_conf : float
         threshold to keep bounding box predictions from the model
+    save_name : str
+        name to save the file as
     """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name[name.rfind('/')+1:] for name in first_reads.ID])
@@ -191,7 +194,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
 
         # Write accuracies, recalls, and thresholds to CSV
         print('Writing to file...')
-        with open(os.path.join(ARGS['COMPARE_READS_FOLDER'], 'perf_across_iou.csv'), 'w') as out_file:
+        with open(save_name, 'w') as out_file:
             for thresh, acc, rec in zip(iou_threshold, accuracies, recalls):
                 out_str = ','.join([str(thresh), str(acc), str(rec)]) + '\n'
                 out_file.write(out_str)
@@ -270,7 +273,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', fr_kappa))
         print('')
 
-def create_bbox_dataframe(first_reads, second_reads, iou_threshold):
+def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''):
     """
     Create a DataFrame with each bounding box for each patient for both reads.
 
@@ -280,6 +283,8 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold):
         contains image and bounding box locations from the first radiologist reads
     second_reads : DataFrame
         contains image and bounding box locations from the second radiologist reads
+    save_name : str
+        name to save the file as
     """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name[name.rfind('/')+1:] for name in first_reads.ID])
@@ -354,9 +359,9 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold):
 
     # Output bbox_df to a file
     print('Writing to file...')
-    bbox_df.to_csv(os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_vs_read2_bboxes.csv'), index=False)
+    bbox_df.to_csv(save_name, index=False)
 
-def compute_afroc(ground_truths, model_predictions):
+def compute_afroc(ground_truths, model_predictions, save_name=''):
     """
     Calculates LLF and FPR for each threshold to plot an AFROC curve of the model performance
 
@@ -366,6 +371,8 @@ def compute_afroc(ground_truths, model_predictions):
         contains image and bounding box locations from radiologist reads
     model_predictions : DataFrame
         contains image and bounding box locations with probabilities from the neural network
+    save_name : str
+        name to save the file as
     """
     # Sort all the probabilities from the model
     sorted_scores = model_predictions.Prob.sort_values()
@@ -420,7 +427,7 @@ def compute_afroc(ground_truths, model_predictions):
 
     # Output values to a file
     print('Writing to file...')
-    with open(os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_afroc.csv'), 'w') as out_file:
+    with open(save_name, 'w') as out_file:
         for threshold, llf, fpr in zip(sorted_scores, llf_list, fpr_list):
             out_file.write('{},{},{}\n'.format(threshold, llf, fpr))
 
@@ -437,6 +444,9 @@ def main(parse_args):
     first_reads = first_reads.drop(columns=['Height', 'Width'])
     second_reads = second_reads.drop(columns=['Height', 'Width'])
 
+    # Define path to save files to
+    save_name = os.path.join(parse_args.save_dir, parse_args.filename)
+
     if parse_args.images:
         make_images(first_reads, second_reads)
 
@@ -448,18 +458,21 @@ def main(parse_args):
                           verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
 
     if parse_args.bboxes:
-        create_bbox_dataframe(first_reads, second_reads, iou_threshold=parse_args.iou_thresh)
+        filename = os.path.join(parse_args.save_dir, 'read1_vs_read2_bboxes.csv')
+        create_bbox_dataframe(first_reads, second_reads, iou_threshold=parse_args.iou_thresh, save_name=filename)
 
     if parse_args.plot:
+        filename = os.path.join(parse_args.save_dir, 'perf_across_iou.csv')
         if parse_args.model:
             iou_threshold = second_reads.Prob.sort_values()
         else:
             iou_threshold = np.arange(0, 101, 1) / 100
-        calculate_metrics(first_reads, second_reads, iou_threshold=iou_threshold,
-                          verbose=False, model=parse_args.model, model_conf=parse_args.model_conf)
+        calculate_metrics(first_reads, second_reads, iou_threshold=iou_threshold, verbose=False,
+                          model=parse_args.model, model_conf=parse_args.model_conf, save_name=filename)
 
     if parse_args.afroc:
-        compute_afroc(first_reads, second_reads)
+        filename = os.path.join(parse_args.save_dir, 'read1_afroc.csv')
+        compute_afroc(first_reads, second_reads, save_name=filename)
 
 
 if __name__ == "__main__":
@@ -498,8 +511,11 @@ if __name__ == "__main__":
     parser.add_argument('--model_conf', type=float, default=0.50,
                         help='The threshold to keep model bounding box predictions.')
 
-    parser.add_argument('--filename', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_vs_read2_bboxes.csv'),
-                        help='Filename of the CSV to output bounding box comparisons between reads.')
+    parser.add_argument('--save_dir', default=ARGS['COMPARE_READS_FOLDER'],
+                        help='Default folder to save files to.')
+
+    parser.add_argument('--filename',
+                        help='Name to save file as.')
 
     parser_args = parser.parse_args()
 
