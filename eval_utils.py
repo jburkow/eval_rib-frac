@@ -2,7 +2,7 @@
 Filename: eval_utils.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 03/06/2021
+Last Updated: 03/07/2021
 Description: Various utility functions used for evaluating performance
     of the model on detection.
 '''
@@ -86,7 +86,7 @@ def draw_caption(image, box, caption, loc=''):
         cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
         cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
-def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False):
+def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False, conf_threshold=0.00):
     """
     Extracts the bounding box locations of the specific patient from the annotations file.
 
@@ -100,6 +100,8 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False)
         path/location of the annotation file
     has_probs : bool
         whether or not DataFrame includes probabilities (for model predictions)
+    conf_threshold : float
+        probability/confidence threshold of model bounding box predictions to keep
 
     Returns
     -------
@@ -124,8 +126,9 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False)
     if has_probs:
         probs = []
         for _, row in subset_df.iterrows():
-            boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
-            probs.append(row['Prob'])
+            if row['Prob'] >= conf_threshold:
+                boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
+                probs.append(row['Prob'])
 
         return boxes, probs
 
