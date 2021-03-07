@@ -127,7 +127,7 @@ def make_images_from_file(filename, first_reads):
         cv2.imwrite(os.path.join(ARGS['COMPARE_READS_IMAGES_COLORED_FOLDER'], patient_id + '.jpg'), img)
     print('') # End print stream from loop
 
-def calculate_metrics(first_reads, second_reads, iou_threshold=0.30, verbose=False):
+def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=False, model=False, model_conf=None):
     """
     Calculates various performance metrics across the two reads.
 
@@ -142,6 +142,10 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=0.30, verbose=Fal
         it will loop through all thresholds and save performance to CSV
     verbose : bool
         whether to print out metrics to console
+    model : bool
+        whether model predictions are being used as one of the reads (use read2)
+    model_conf : float
+        threshold to keep bounding box predictions from the model
     """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name[name.rfind('/')+1:] for name in first_reads.ID])
@@ -203,7 +207,10 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=0.30, verbose=Fal
 
             # Get first- and second-read bounding boxes for patient
             read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
-            read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
+            if model:
+                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
+            else:
+                read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
 
             # Add bounding box areas for both reads to lists
             [read1_box_areas.append(calc_bbox_area(box)) for box in read1_bboxes]
@@ -236,12 +243,12 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=0.30, verbose=Fal
         # Calculate Cohen's Kappa on the two annotation reads
         coh_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='cohens_kappa')
         # Calculate Free-Response Kappa on the two annotation reads
-        fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa')
+        fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa_fr')
 
     if verbose:
         # Print out misc. confusion matrix stats
         print('')
-        print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 2', 'RetinaNet'))
+        print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 1', 'RetinaNet'))
         print('|{}|'.format('-'*46))
         print('|{:^24}|{:^21}|'.format('Total Images', str(len(match_annos))))
         print('|{:^24}|{:^10}|{:^10}|'.format('Total Ribs Labeled', calc_df['BBoxes Read 1'].sum(), calc_df['BBoxes Read 2'].sum()))
@@ -254,6 +261,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=0.30, verbose=Fal
         print('|{:^24}|{:^21}|'.format('False Positives', false_pos))
         print('|{:^24}|{:^21}|'.format('False Negatives', false_neg))
         print('|{:^24}|{:^21.3}|'.format('IOU Threshold', iou_threshold))
+        print('|{:^24}|{:^21.3}|'.format('Model Confidence', model_conf if model else ''))
         print('|{:^24}|{:^21.5}|'.format('Accuracy', accuracy))
         print('|{:^24}|{:^21.5}|'.format('Precision', precision))
         print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', recall))
@@ -436,7 +444,8 @@ def main(parse_args):
         make_images_from_file(parse_args.filename, first_reads)
 
     if parse_args.metrics:
-        calculate_metrics(first_reads, second_reads, iou_threshold=parse_args.iou_thresh, verbose=True)
+        calculate_metrics(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
+                          verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
 
     if parse_args.bboxes:
         create_bbox_dataframe(first_reads, second_reads, iou_threshold=parse_args.iou_thresh)
@@ -446,7 +455,8 @@ def main(parse_args):
             iou_threshold = second_reads.Prob.sort_values()
         else:
             iou_threshold = np.arange(0, 101, 1) / 100
-        calculate_metrics(first_reads, second_reads, iou_threshold=iou_threshold, verbose=False)
+        calculate_metrics(first_reads, second_reads, iou_threshold=iou_threshold,
+                          verbose=False, model=parse_args.model, model_conf=parse_args.model_conf)
 
     if parse_args.afroc:
         compute_afroc(first_reads, second_reads)
@@ -482,8 +492,11 @@ if __name__ == "__main__":
     parser.add_argument('--second_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read2_annotations_crop.csv'),
                         help='Filename to CSV containing second read annotations. Also used as model predictions.')
 
-    parser.add_argument('--iou_thresh', type=float, default=0.3,
+    parser.add_argument('--iou_thresh', type=float, default=0.30,
                         help='The threshold to use for determining if IOU counts toward a True Positive.')
+
+    parser.add_argument('--model_conf', type=float, default=0.50,
+                        help='The threshold to keep model bounding box predictions.')
 
     parser.add_argument('--filename', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_vs_read2_bboxes.csv'),
                         help='Filename of the CSV to output bounding box comparisons between reads.')
