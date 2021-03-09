@@ -2,7 +2,7 @@
 Filename: eval_utils.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 03/07/2021
+Last Updated: 03/09/2021
 Description: Various utility functions used for evaluating performance
     of the model on detection.
 '''
@@ -10,6 +10,7 @@ Description: Various utility functions used for evaluating performance
 import cv2
 import numpy as np
 import pandas as pd
+from scipy.integrate import simps
 
 def pytorch_resize(image, min_side=608, max_side=1024):
     """
@@ -316,3 +317,29 @@ def calc_bbox_area(box):
     bbox_area = bbox_height * bbox_width
 
     return bbox_area
+
+def calc_auc(afroc_df):
+    """
+    Calculates the AUC of the AFROC curve for evaluating model performance.
+
+    Parameters
+    ----------
+    afroc_df : DataFrame
+        DataFrame that has LLF and FPR values for each threshold
+
+    Returns
+    -------
+    auc : float
+        area under the AFROC curve
+    """
+    # Calculate AUC using Simpson's Rule
+    auc = simps(afroc_df['LLF'], afroc_df['Threshold'])
+
+    # Backup AUC calculation if Simpson's Rule fails
+    if not auc >= 0.0 and not auc <= 1.0:
+        auc = 0
+        for i in range(len(afroc_df) - 1):
+            dx = afroc_df['Threshold'].iloc[i+1] - afroc_df['Threshold'].iloc[i]
+            auc += dx * (afroc_df['LLF'].iloc[i+1] + afroc_df['LLF'].iloc[i]) / 2
+
+    return auc
