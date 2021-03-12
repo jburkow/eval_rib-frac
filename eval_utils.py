@@ -139,7 +139,7 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False,
 
     return boxes
 
-def intersection_over_union(predict_box, truth_box):
+def intersection_over_union(predict_box, truth_box, perc_overlap=False):
     """
     Computes the intersection-over-union of two bounding boxes.
 
@@ -171,9 +171,13 @@ def intersection_over_union(predict_box, truth_box):
     # Calculate the intersection over union
     iou = int_area / float(pred_area + truth_area - int_area)
 
+    if perc_overlap:
+        overlap = int_area / float(truth_area)
+        return iou, overlap
+
     return iou
 
-def calc_performance(predictions, truths, iou_threshold=0.50):
+def calc_performance(predictions, truths, iou_threshold=0.50, perc_overlap=False):
     """
     Calculate how well the model performs at predicting the correct
     bounding boxes. Performance is measured in terms of how many
@@ -204,6 +208,7 @@ def calc_performance(predictions, truths, iou_threshold=0.50):
     false_pos = 0
     false_neg = 0
     ious = []
+    overlaps = []
 
     if len(predictions) == 0: # If no predictions, count all false negatives
         false_neg = len(truths)
@@ -211,13 +216,15 @@ def calc_performance(predictions, truths, iou_threshold=0.50):
         for box in predictions:
             iou = 0
             for truth in truths:
-                temp_iou = intersection_over_union(box, truth)
+                temp_iou, temp_overlap = intersection_over_union(box, truth, perc_overlap=perc_overlap)
                 if temp_iou > iou_threshold:
                     iou = temp_iou
-            if iou == 0: # If no IoUs > 0.50, count as false positives
+                    overlap = temp_overlap
+            if iou == 0: # If no IoUs > iou_threshold, count as false positives
                 false_pos += 1
             else:
                 ious.append(iou)
+                overlaps.append(overlap)
                 true_pos += 1
         # Add to false negative count if truth box has no overlaps with predictions
         for truth in truths:
@@ -229,6 +236,8 @@ def calc_performance(predictions, truths, iou_threshold=0.50):
             if iou == 0:
                 false_neg += 1
 
+    if perc_overlap:
+        return true_pos, false_pos, false_neg, ious, overlaps
     return true_pos, false_pos, false_neg, ious
 
 def calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy'):
@@ -256,8 +265,8 @@ def calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy'):
 
     Free-response Kappa: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/
     """
-    if metric not in ('accuracy', 'precision', 'positive_predictive_value', 'recall', 'sensitivity', 'f1_score',
-                      'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr'):
+    if metric not in ('accuracy', 'precision', 'positive_predictive_value', 'recall', 'sensitivity',
+                      'f1_score', 'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr'):
         raise ValueError('Unsupported metric string provided in calc_metric: ' + metric)
 
     if metric == 'accuracy':
