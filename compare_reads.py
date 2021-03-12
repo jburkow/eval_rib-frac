@@ -205,6 +205,8 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
 
         read1_box_areas = []
         read2_box_areas = []
+        all_overlaps = []
+        all_ious = []
         for i, patient in enumerate(match_annos):
             print_iter(len(match_annos), i, print_type='image')
 
@@ -220,7 +222,11 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
             [read2_box_areas.append(calc_bbox_area(box)) for box in read2_bboxes]
 
             # Calculate performance between bounding boxes
-            true_pos, false_pos, false_neg, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
+            true_pos, false_pos, false_neg, ious, overlaps = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold, perc_overlap=True)
+
+            # Add percent overlaps to all_overlaps
+            [all_overlaps.append(val) for val in overlaps]
+            [all_ious.append(val) for val in ious]
 
             # Add values to calc_df
             calc_df = calc_df.append({'Patient' : patient,
@@ -231,21 +237,21 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                                       'False Negatives' : false_neg}, ignore_index=True)
         print('') # End print stream from loop
 
-        # Calculate bounding box areas for each read
+        # Convert lists to arrays
         read1_areas = np.array(read1_box_areas)
         read2_areas = np.array(read2_box_areas)
+        all_overlaps = np.array(all_overlaps)
+        all_ious = np.array(all_ious)
 
         # Pull out confusion matrix values and calculate metrics
         true_pos, false_pos, false_neg, true_neg = calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), 0
 
+        # Calculate various metrics
         accuracy = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy')
         precision = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='precision')
         recall = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='recall')
         f1_score = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f1_score')
-
-        # Calculate Cohen's Kappa on the two annotation reads
         coh_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='cohens_kappa')
-        # Calculate Free-Response Kappa on the two annotation reads
         fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa_fr')
 
     if verbose:
@@ -253,18 +259,18 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('')
         print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 1', 'RetinaNet'))
         print('|{}|'.format('-'*46))
-        print('|{:^24}|{:^21}|'.format('Total Images', str(len(match_annos))))
+        print('|{:^24}|{:^21}|'.format('Total Images', len(match_annos)))
         print('|{:^24}|{:^10}|{:^10}|'.format('Total Ribs Labeled', calc_df['BBoxes Read 1'].sum(), calc_df['BBoxes Read 2'].sum()))
         print('|{:^24}|{:^10.5}|{:^10.5}|'.format('Avg. Ribs/Image', calc_df['BBoxes Read 1'].mean(), calc_df['BBoxes Read 2'].mean()))
         print('|{}|'.format('-'*46))
-        print('|{:^24}|{:^10.5}|{:^10.5}|'.format('Avg. Bounding Box Area', read1_areas.mean(), read2_areas.mean()))
-        print('|{:^24}|{:^10.5}|{:^10.5}|'.format('Bounding Box Std. Dev', read1_areas.std(), read2_areas.std()))
+        print('|{:^24}|{:^21.3}|'.format('IOU Threshold', iou_threshold))
+        print('|{:^24}|{:^21.5}|'.format('Avg. Percent Overlap', all_overlaps.mean()))
+        print('|{:^24}|{:^21.5}|'.format('Avg. IOU', all_ious.mean()))
+        print('|{:^24}|{:^21.3}|'.format('Model Confidence', model_conf if model else ''))
         print('|{}|'.format('-'*46))
         print('|{:^24}|{:^21}|'.format('True Positives', true_pos))
         print('|{:^24}|{:^21}|'.format('False Positives', false_pos))
         print('|{:^24}|{:^21}|'.format('False Negatives', false_neg))
-        print('|{:^24}|{:^21.3}|'.format('IOU Threshold', iou_threshold))
-        print('|{:^24}|{:^21.3}|'.format('Model Confidence', model_conf if model else ''))
         print('|{:^24}|{:^21.5}|'.format('Accuracy', accuracy))
         print('|{:^24}|{:^21.5}|'.format('Precision', precision))
         print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', recall))
@@ -434,18 +440,19 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
 def main(parse_args):
     """Main Function"""
     # Import first and second reads
-    first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
+    if parse_args.old:
+        first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID','x1', 'y1', 'x2', 'y2', 'class'))
+    else:
+        first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
     if parse_args.model:
         second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
     else:
         second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
 
     # Drop Height and Width columns
-    first_reads = first_reads.drop(columns=['Height', 'Width'])
+    if not parse_args.old:
+        first_reads = first_reads.drop(columns=['Height', 'Width'])
     second_reads = second_reads.drop(columns=['Height', 'Width'])
-
-    # Define path to save files to
-    save_name = os.path.join(parse_args.save_dir, parse_args.filename)
 
     if parse_args.images:
         make_images(first_reads, second_reads)
@@ -458,11 +465,11 @@ def main(parse_args):
                           verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
 
     if parse_args.bboxes:
-        filename = os.path.join(parse_args.save_dir, 'read1_vs_read2_bboxes.csv')
+        filename = os.path.join(parse_args.save_dir, 'read1_vs_read2_bboxes.csv' if parse_args.filename is None else parse_args.filename)
         create_bbox_dataframe(first_reads, second_reads, iou_threshold=parse_args.iou_thresh, save_name=filename)
 
     if parse_args.plot:
-        filename = os.path.join(parse_args.save_dir, 'perf_across_iou.csv')
+        filename = os.path.join(parse_args.save_dir, 'perf_across_iou.csv' if parse_args.filename is None else parse_args.filename)
         if parse_args.model:
             iou_threshold = second_reads.Prob.sort_values()
         else:
@@ -471,12 +478,12 @@ def main(parse_args):
                           model=parse_args.model, model_conf=parse_args.model_conf, save_name=filename)
 
     if parse_args.afroc:
-        filename = os.path.join(parse_args.save_dir, 'read1_afroc.csv')
+        filename = os.path.join(parse_args.save_dir, 'read1_afroc.csv' if parse_args.filename is None else parse_args.filename)
         compute_afroc(first_reads, second_reads, save_name=filename)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Create images with annotations from two sets of reads, or calculate metrics of inter-reader relatability.')
+    parser = argparse.ArgumentParser(description='Multi-function script to compare two radiologist reads, or one set of reads with model predictions.')
 
     parser.add_argument('--images', action='store_true',
                         help='Create images with drawn-on annotations from both reads.')
@@ -498,7 +505,10 @@ if __name__ == "__main__":
 
     parser.add_argument('--model', action='store_true',
                         help='Boolean for whether model predictions are being used')
-    
+
+    parser.add_argument('--old', action='store_true',
+                        help='If using older annotation files without height and width.')
+
     parser.add_argument('--first_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_annotations_crop.csv'),
                         help='Filename to CSV containing first read annotations. Also used a ground truth annotations in --afroc.')
 
