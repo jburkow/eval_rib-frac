@@ -20,7 +20,7 @@ from general_utils import print_iter
 from eval_utils import (draw_box, get_bounding_boxes, calc_performance, calc_metric,
                         calc_bbox_area, intersection_over_union)
 
-def make_images(first_reads, second_reads):
+def make_images(first_reads, second_reads, im_path=None, save_dir=None):
     """
     Creates new image files with drawn-on annotations from both reads.
 
@@ -32,7 +32,7 @@ def make_images(first_reads, second_reads):
         contains image and bounding box locations from the second radiologist reads
     """
     # Define list of images
-    img_list = [os.path.join(root, file) for root, _, files in os.walk(ARGS['8_BIT_OG_IMAGE_FOLDER']) for file in files]
+    img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files]
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
     for i, img_nm in enumerate(img_list):
@@ -59,10 +59,11 @@ def make_images(first_reads, second_reads):
             draw_box(img, box, [0, 255, 255]) # cv2 saves JPG as BGR -> this is yellow
 
         # Save image to file
-        cv2.imwrite(os.path.join(ARGS['COMPARE_READS_IMAGES_FOLDER'], patient_id + '.jpg'), img)
+        save_to = ARGS['COMPARE_READS_IMAGES_FOLDER'] if save_dir is None else save_dir
+        cv2.imwrite(os.path.join(save_to, patient_id + '.jpg'), img)
     print('') # End print stream from loop
 
-def make_images_from_file(filename, first_reads):
+def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
     """
     Creates new image files with drawn-on annotations from both reads. Uses a pre-made CSV file
     with bounding boxes from both reads already classified as true positive, false positive, and
@@ -76,7 +77,7 @@ def make_images_from_file(filename, first_reads):
         contains image and bounding box locations from the first radiologist reads
     """
     # Define list of images
-    img_list = [os.path.join(root, file) for root, _, files in os.walk(ARGS['8_BIT_OG_IMAGE_FOLDER']) for file in files]
+    img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files]
 
     # Load in DataFrame from CSV file
     bbox_df = pd.read_csv(filename, names=(['Patient', 'Read1 Box', 'Read1 Area', 'Read2 Box', 'Read2 Area', 'Result', 'Max IOU']))
@@ -90,6 +91,9 @@ def make_images_from_file(filename, first_reads):
 
         # Pull current patient bounding boxes from the first read
         patient_read1 = first_reads[first_reads['ID'].str.contains(patient_id)]
+
+        if len(patient_read1) < 1:
+            continue
 
         # Pull current patient bounding boxes from comparison CSV file
         patient_bboxes = bbox_df[bbox_df['Patient'].str.contains(patient_id)]
@@ -124,7 +128,8 @@ def make_images_from_file(filename, first_reads):
                 draw_box(img, box, box_color_fn)
 
         # Save image to file
-        cv2.imwrite(os.path.join(ARGS['COMPARE_READS_IMAGES_COLORED_FOLDER'], patient_id + '.jpg'), img)
+        save_to = ARGS['COMPARE_READS_IMAGES_COLORED_FOLDER'] if save_dir is None else save_dir
+        cv2.imwrite(os.path.join(save_to, patient_id + '.jpg'), img)
     print('') # End print stream from loop
 
 def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=False, model=False,
@@ -279,7 +284,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', fr_kappa))
         print('')
 
-def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''):
+def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name='', model=None, model_conf=None):
     """
     Create a DataFrame with each bounding box for each patient for both reads.
 
@@ -307,7 +312,10 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
 
         # Get first- and second-read bounding boxes for patient
         read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
-        read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
+        if model:
+            read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
+        else:
+            read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
 
         # Loop through each read 1 box and find overlapping boxes from read 2
         for box1 in read1_bboxes:
@@ -441,9 +449,10 @@ def main(parse_args):
     """Main Function"""
     # Import first and second reads
     if parse_args.old:
-        first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID','x1', 'y1', 'x2', 'y2', 'class'))
+        first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID', 'x1', 'y1', 'x2', 'y2', 'class'))
     else:
         first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
+
     if parse_args.model:
         second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
     else:
@@ -455,21 +464,24 @@ def main(parse_args):
     second_reads = second_reads.drop(columns=['Height', 'Width'])
 
     if parse_args.images:
-        make_images(first_reads, second_reads)
+        make_images(first_reads, second_reads, parse_args.images_path, parse_args.save_dir)
 
     if parse_args.color_images:
-        make_images_from_file(parse_args.filename, first_reads)
+        make_images_from_file(parse_args.bbox_filename, first_reads, parse_args.images_path, parse_args.save_dir)
 
     if parse_args.metrics:
         calculate_metrics(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
                           verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
 
+    save_dir = ARGS['COMPARE_READS_FOLDER'] if parse_args.save_dir is None else parse_args.save_dir
+
     if parse_args.bboxes:
-        filename = os.path.join(parse_args.save_dir, 'read1_vs_read2_bboxes.csv' if parse_args.filename is None else parse_args.filename)
-        create_bbox_dataframe(first_reads, second_reads, iou_threshold=parse_args.iou_thresh, save_name=filename)
+        filename = os.path.join(save_dir, 'read1_vs_read2_bboxes.csv' if parse_args.filename is None else parse_args.filename)
+        create_bbox_dataframe(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
+                              save_name=filename, model=parse_args.model, model_conf=parse_args.model_conf)
 
     if parse_args.plot:
-        filename = os.path.join(parse_args.save_dir, 'perf_across_iou.csv' if parse_args.filename is None else parse_args.filename)
+        filename = os.path.join(save_dir, 'perf_across_iou.csv' if parse_args.filename is None else parse_args.filename)
         if parse_args.model:
             iou_threshold = second_reads.Prob.sort_values()
         else:
@@ -478,7 +490,7 @@ def main(parse_args):
                           model=parse_args.model, model_conf=parse_args.model_conf, save_name=filename)
 
     if parse_args.afroc:
-        filename = os.path.join(parse_args.save_dir, 'read1_afroc.csv' if parse_args.filename is None else parse_args.filename)
+        filename = os.path.join(save_dir, 'read1_afroc.csv' if parse_args.filename is None else parse_args.filename)
         compute_afroc(first_reads, second_reads, save_name=filename)
 
 
@@ -509,11 +521,17 @@ if __name__ == "__main__":
     parser.add_argument('--old', action='store_true',
                         help='If using older annotation files without height and width.')
 
+    parser.add_argument('--images_path', type=str, default=ARGS['8_BIT_CROP_HISTEQ_IMAGE_FOLDER'],
+                        help='Path to the images for --images and --color_images.')
+
     parser.add_argument('--first_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read1_annotations_crop.csv'),
                         help='Filename to CSV containing first read annotations. Also used a ground truth annotations in --afroc.')
 
     parser.add_argument('--second_read_csv', type=str, default=os.path.join(ARGS['COMPARE_READS_FOLDER'], 'read2_annotations_crop.csv'),
                         help='Filename to CSV containing second read annotations. Also used as model predictions.')
+
+    parser.add_argument('--bbox_filename', type=str,
+                        help='Filename to CSV containing bounding box information from --bboxes.')
 
     parser.add_argument('--iou_thresh', type=float, default=0.30,
                         help='The threshold to use for determining if IOU counts toward a True Positive.')
@@ -521,7 +539,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_conf', type=float, default=0.50,
                         help='The threshold to keep model bounding box predictions.')
 
-    parser.add_argument('--save_dir', default=ARGS['COMPARE_READS_FOLDER'],
+    parser.add_argument('--save_dir',
                         help='Default folder to save files to.')
 
     parser.add_argument('--filename',
