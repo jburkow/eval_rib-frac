@@ -262,11 +262,17 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
     if verbose:
         # Print out misc. confusion matrix stats
         print('')
-        print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 1', 'RetinaNet'))
+        print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 1', 'Read 2'))
         print('|{}|'.format('-'*46))
         print('|{:^24}|{:^21}|'.format('Total Images', len(match_annos)))
         print('|{:^24}|{:^10}|{:^10}|'.format('Total Ribs Labeled', calc_df['BBoxes Read 1'].sum(), calc_df['BBoxes Read 2'].sum()))
         print('|{:^24}|{:^10.5}|{:^10.5}|'.format('Avg. Ribs/Image', calc_df['BBoxes Read 1'].mean(), calc_df['BBoxes Read 2'].mean()))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Median Ribs/Image', calc_df['BBoxes Read 1'].median(), calc_df['BBoxes Read 2'].median()))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Min Ribs/Image', calc_df['BBoxes Read 1'].min(), calc_df['BBoxes Read 2'].min()))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Max Ribs/Image', calc_df['BBoxes Read 1'].max(), calc_df['BBoxes Read 2'].max()))
+        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('Q1 Ribs/Image', calc_df['BBoxes Read 1'].quantile(0.25), calc_df['BBoxes Read 2'].quantile(0.25)))
+        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('Q3 Ribs/Image', calc_df['BBoxes Read 1'].quantile(0.75), calc_df['BBoxes Read 2'].quantile(0.75)))
+        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('IQR Ribs/Image', calc_df['BBoxes Read 1'].quantile(0.75) - calc_df['BBoxes Read 1'].quantile(0.25), calc_df['BBoxes Read 2'].quantile(0.75) - calc_df['BBoxes Read 2'].quantile(0.25)))
         print('|{}|'.format('-'*46))
         print('|{:^24}|{:^21.3}|'.format('IOU Threshold', iou_threshold))
         print('|{:^24}|{:^21.5}|'.format('Avg. Percent Overlap', all_overlaps.mean()))
