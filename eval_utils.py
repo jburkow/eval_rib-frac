@@ -2,15 +2,17 @@
 Filename: eval_utils.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 03/09/2021
+Last Updated: 05/18/2021
 Description: Various utility functions used for evaluating performance
     of the model on detection.
 '''
 
+import sys
 import cv2
 import numpy as np
 import pandas as pd
 from scipy.integrate import simps
+
 
 def pytorch_resize(image, min_side=608, max_side=1024):
     """
@@ -48,6 +50,7 @@ def pytorch_resize(image, min_side=608, max_side=1024):
 
     return image, scale
 
+
 def draw_box(image, box, color, thickness=2):
     """
     Draw a bounding box on the image.
@@ -65,6 +68,7 @@ def draw_box(image, box, color, thickness=2):
     """
     box = np.array(box).astype(int)
     cv2.rectangle(image, (box[0], box[1]), (box[2], box[3]), color, thickness, cv2.LINE_AA)
+
 
 def draw_caption(image, box, caption, loc=''):
     """
@@ -86,6 +90,7 @@ def draw_caption(image, box, caption, loc=''):
     else:
         cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
         cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+
 
 def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False, conf_threshold=0.00):
     """
@@ -117,19 +122,29 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False,
     else:
         frac_info = anno_df
 
+    # Make a subset DataFrame with just current patient information
+    subset_df = frac_info[frac_info['ID'].str.contains(patient_nm.split('/')[-1], case=False)]
+
+    # If any values are NaN (i.e., there are no fractures labeled), return empty lists
+    if subset_df.isnull().values.any():
+        return ([],[]) if has_probs else []
+
     # Make an empty list to append possible bounding boxes to
     boxes = []
 
-    # Make a subset DataFrame with just current image information
-    subset_df = frac_info[frac_info['ID'].str.contains(patient_nm[patient_nm.rfind('/')+1:])]
-
-    # Extract the window values
     if has_probs:
+        # Mask out rows with model confidence values below given threshold
+        subset_df = subset_df[subset_df.Prob >= conf_threshold]
+
+        # If the resultant DataFrame is empty, return empty lists
+        if len(subset_df) == 0:
+            return ([],[]) if has_probs else []
+
+        # Loop through DataFrame to pull out bounding boxes and corresponding probabilities
         probs = []
         for _, row in subset_df.iterrows():
-            if row['Prob'] >= conf_threshold:
-                boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
-                probs.append(row['Prob'])
+            boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
+            probs.append(row['Prob'])
 
         return boxes, probs
 
@@ -139,7 +154,8 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False,
 
     return boxes
 
-def intersection_over_union(predict_box, truth_box, perc_overlap=False):
+
+def intersection_over_union(predict_box, truth_box):
     """
     Computes the intersection-over-union of two bounding boxes.
 
@@ -168,16 +184,16 @@ def intersection_over_union(predict_box, truth_box, perc_overlap=False):
     pred_area = (predict_box[2] - predict_box[0]) * (predict_box[3] - predict_box[1])
     truth_area = (truth_box[2] - truth_box[0]) * (truth_box[3] - truth_box[1])
 
+    # Calculate percent overlap (percent of ground truth box overlapped by prediction box)
+    overlap = int_area / float(truth_area)
+
     # Calculate the intersection over union
     iou = int_area / float(pred_area + truth_area - int_area)
 
-    if perc_overlap:
-        overlap = int_area / float(truth_area)
-        return iou, overlap
+    return iou, overlap
 
-    return iou
 
-def calc_performance(predictions, truths, iou_threshold=0.50, perc_overlap=False):
+def calc_performance(predictions, truths, iou_threshold=0.50):
     """
     Calculate how well the model performs at predicting the correct
     bounding boxes. Performance is measured in terms of how many
@@ -202,43 +218,60 @@ def calc_performance(predictions, truths, iou_threshold=0.50, perc_overlap=False
         number of false negatives
     ious : list
         list of intersection-over-union values for each box pair
+    overlaps : list
+        list of overlap values for each box pair
     """
     # Initialize output values
     true_pos = 0
     false_pos = 0
     false_neg = 0
+    true_neg = 0
     ious = []
     overlaps = []
 
-    if len(predictions) == 0: # If no predictions, count all false negatives
-        false_neg = len(truths)
-    else:
-        for box in predictions:
-            iou = 0
-            for truth in truths:
-                temp_iou, temp_overlap = intersection_over_union(box, truth, perc_overlap=perc_overlap)
-                if temp_iou > iou_threshold:
-                    iou = temp_iou
-                    overlap = temp_overlap
-            if iou == 0: # If no IoUs > iou_threshold, count as false positives
-                false_pos += 1
-            else:
-                ious.append(iou)
-                overlaps.append(overlap)
-                true_pos += 1
-        # Add to false negative count if truth box has no overlaps with predictions
-        for truth in truths:
-            iou = 0
-            for box in predictions:
-                temp_iou = intersection_over_union(box, truth)
-                if temp_iou > iou_threshold:
-                    iou = temp_iou
-            if iou == 0:
-                false_neg += 1
+    # If neither ground truth or model has fractures, return a true negative
+    if len(predictions) == 0 and len(truths) == 0:
+        true_neg = 1
+        return true_pos, false_pos, false_neg, true_neg, ious, overlaps
 
-    if perc_overlap:
-        return true_pos, false_pos, false_neg, ious, overlaps
-    return true_pos, false_pos, false_neg, ious
+    # No model predictions but ground truths, return all as false negatives
+    if len(predictions) == 0 and len(truths) > 0:
+        false_neg = len(truths)
+        return true_pos, false_pos, false_neg, true_neg, ious, overlaps
+
+    # No ground truths but model has fractures, return all as false positives
+    if len(truths) == 0 and len(predictions) > 0:
+        false_pos = len(predictions)
+        return true_pos, false_pos, false_neg, true_neg, ious, overlaps
+
+    # Calculate true positive, false positive, and false negatives if
+    # both model predicted fractures and ground truth has labels
+    for box in predictions:
+        iou = 0
+        overlap = 0
+        for truth in truths:
+            temp_iou, temp_overlap = intersection_over_union(box, truth)
+            if temp_iou > iou_threshold:
+                iou = temp_iou if temp_iou > iou else iou
+                overlap = temp_overlap if temp_overlap > overlap else overlap
+        if iou == 0: # If no IoUs > iou_threshold, count as false positives
+            false_pos += 1
+        else:
+            ious.append(iou)
+            overlaps.append(overlap)
+            true_pos += 1
+    # Add to false negative count if truth box has no overlaps with predictions
+    for truth in truths:
+        iou = 0
+        for box in predictions:
+            temp_iou, _ = intersection_over_union(box, truth)
+            if temp_iou > iou_threshold:
+                iou = temp_iou
+        if iou == 0:
+            false_neg += 1
+
+    return true_pos, false_pos, false_neg, true_neg, ious, overlaps
+
 
 def calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy'):
     """
