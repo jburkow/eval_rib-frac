@@ -2,7 +2,7 @@
 Filename: compare_reads.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 03/06/2021
+Last Updated: 05/18/2021
 Description: Goes through two separate radiologist read annotation files
     and either creates images with annotations drawn on, or calculates
     a Kappa metric across the dataset.
@@ -10,15 +10,19 @@ Description: Goes through two separate radiologist read annotation files
 
 import argparse
 import os
+import sys
 import time
 import numpy as np
 import pandas as pd
 import cv2
 
+from tqdm import tqdm
+
 from args import ARGS
 from general_utils import print_iter
 from eval_utils import (draw_box, get_bounding_boxes, calc_performance, calc_metric,
                         calc_bbox_area, intersection_over_union)
+
 
 def make_images(first_reads, second_reads, im_path=None, save_dir=None):
     """
@@ -30,14 +34,17 @@ def make_images(first_reads, second_reads, im_path=None, save_dir=None):
         contains image and bounding box locations from the first radiologist reads
     second_reads : DataFrame
         contains image and bounding box locations from the second radiologist reads
+    im_path : str
+        path containing images to draw annotations on
+    save_dir : str
+        path to save images with drawn-on annotations
     """
     # Define list of images
     img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files]
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
-    for i, img_nm in enumerate(img_list):
-        print_iter(len(img_list), i, 'image')
-
+    pbar = tqdm(iterable=enumerate(img_list), total=len(img_list), desc='Saving Annotated Images')
+    for _, img_nm in pbar:
         # Pull the Patient ID from the annotations file
         patient_id = img_nm[img_nm.rfind('Anon_'):-4]
 
@@ -61,7 +68,7 @@ def make_images(first_reads, second_reads, im_path=None, save_dir=None):
         # Save image to file
         save_to = ARGS['COMPARE_READS_IMAGES_FOLDER'] if save_dir is None else save_dir
         cv2.imwrite(os.path.join(save_to, patient_id + '.jpg'), img)
-    print('') # End print stream from loop
+
 
 def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
     """
@@ -75,6 +82,10 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
         path to the CSV file containing both read bounding box information
     first_reads : DataFrame
         contains image and bounding box locations from the first radiologist reads
+    im_path : str
+        path containing images to draw annotations on
+    save_dir : str
+        path to save images with drawn-on annotations
     """
     # Define list of images
     img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files]
@@ -83,9 +94,8 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
     bbox_df = pd.read_csv(filename, names=(['Patient', 'Read1 Box', 'Read1 Area', 'Read2 Box', 'Read2 Area', 'Result', 'Max IOU']))
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
-    for i, img_nm in enumerate(img_list):
-        print_iter(len(img_list), i, 'image')
-
+    pbar = tqdm(iterable=enumerate(img_list), total=len(img_list), desc='Saving Annotated Images')
+    for _, img_nm in pbar:
         # Pull the Patient ID from the annotations file
         patient_id = img_nm[img_nm.rfind('Anon_'):-4]
 
@@ -130,7 +140,7 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
         # Save image to file
         save_to = ARGS['COMPARE_READS_IMAGES_COLORED_FOLDER'] if save_dir is None else save_dir
         cv2.imwrite(os.path.join(save_to, patient_id + '.jpg'), img)
-    print('') # End print stream from loop
+
 
 def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=False, model=False,
                       model_conf=None, save_name=''):
@@ -156,30 +166,30 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         name to save the file as
     """
     # Pull out unique PatientID.png from ID column of both reads
-    read1_names = np.unique([name[name.rfind('/')+1:] for name in first_reads.ID])
-    read2_names = np.unique([name[name.rfind('/')+1:] for name in second_reads.ID])
+    read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
+    read2_names = np.unique([name.split('/')[-1].upper() for name in second_reads.ID])
 
     # Find matching PatientIDs
     match_annos = np.intersect1d(read1_names, read2_names)
+    print(f'{len(match_annos)} MATCHING IDs -- TEST SET SIZE {len(read1_names)}')
 
     if isinstance(iou_threshold, (list, tuple, set, np.ndarray, pd.Series)):
         # Instantiate lists
         accuracies = []
         recalls = []
 
-        for i, thresh in enumerate(iou_threshold):
-            print_iter(len(iou_threshold), i, 'IOU')
-
+        for _, thresh in enumerate(iou_threshold):
             # Create an empty DataFrame to add calculations per image
-            calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives']))
+            calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
 
-            for _, patient in enumerate(match_annos):
+            pbar = tqdm(iterable=enumerate(match_annos), total=len(match_annos), desc=f'Calculating Metrics at IOU {thresh}')
+            for _, patient in pbar:
                 # Get first- and second-read bounding boxes for patient
                 read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
                 read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
 
                 # Calculate performance between bounding boxes
-                true_pos, false_pos, false_neg, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=thresh)
+                true_pos, false_pos, false_neg,  true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=thresh)
 
                 # Add values to calc_df
                 calc_df = calc_df.append({'Patient' : patient,
@@ -187,7 +197,8 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                                           'BBoxes Read 2' : len(read2_bboxes),
                                           'True Positives' : true_pos,
                                           'False Positives' : false_pos,
-                                          'False Negatives' : false_neg}, ignore_index=True)
+                                          'False Negatives' : false_neg,
+                                          'True Negatives' : true_neg}, ignore_index=True)
 
             accuracy = calc_metric(calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), 0, metric='accuracy')
             recall = calc_metric(calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), 0, metric='recall')
@@ -195,7 +206,6 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
             # Add values to lists
             accuracies.append(accuracy)
             recalls.append(recall)
-        print('') # End print stream from loop
 
         # Write accuracies, recalls, and thresholds to CSV
         print('Writing to file...')
@@ -206,14 +216,13 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
 
     else:
         # Create an empty DataFrame to add calculations per image
-        calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives']))
+        calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
 
-        read1_box_areas = []
-        read2_box_areas = []
         all_overlaps = []
         all_ious = []
-        for i, patient in enumerate(match_annos):
-            print_iter(len(match_annos), i, print_type='image')
+
+        pbar = tqdm(iterable=enumerate(match_annos), total=len(match_annos), desc='Calculating Metrics')
+        for _, patient in pbar:
 
             # Get first- and second-read bounding boxes for patient
             read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
@@ -222,16 +231,14 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
             else:
                 read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
 
-            # Add bounding box areas for both reads to lists
-            [read1_box_areas.append(calc_bbox_area(box)) for box in read1_bboxes]
-            [read2_box_areas.append(calc_bbox_area(box)) for box in read2_bboxes]
-
             # Calculate performance between bounding boxes
-            true_pos, false_pos, false_neg, ious, overlaps = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold, perc_overlap=True)
+            true_pos, false_pos, false_neg, true_neg, ious, overlaps = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
 
             # Add percent overlaps to all_overlaps
-            [all_overlaps.append(val) for val in overlaps]
-            [all_ious.append(val) for val in ious]
+            for val in overlaps:
+                all_overlaps.append(val)
+            for val in ious:
+                all_ious.append(val)
 
             # Add values to calc_df
             calc_df = calc_df.append({'Patient' : patient,
@@ -239,17 +246,15 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                                       'BBoxes Read 2' : len(read2_bboxes),
                                       'True Positives' : true_pos,
                                       'False Positives' : false_pos,
-                                      'False Negatives' : false_neg}, ignore_index=True)
-        print('') # End print stream from loop
+                                      'False Negatives' : false_neg,
+                                      'True Negatives' : true_neg}, ignore_index=True)
 
         # Convert lists to arrays
-        read1_areas = np.array(read1_box_areas)
-        read2_areas = np.array(read2_box_areas)
         all_overlaps = np.array(all_overlaps)
         all_ious = np.array(all_ious)
 
         # Pull out confusion matrix values and calculate metrics
-        true_pos, false_pos, false_neg, true_neg = calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), 0
+        true_pos, false_pos, false_neg, true_neg = calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), calc_df['True Negatives'].sum()
 
         # Calculate various metrics
         accuracy = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy')
@@ -260,19 +265,23 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa_fr')
 
     if verbose:
+        frac_pres_df = calc_df[calc_df['True Negatives'] == 0]
         # Print out misc. confusion matrix stats
         print('')
         print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 1', 'Read 2'))
         print('|{}|'.format('-'*46))
         print('|{:^24}|{:^21}|'.format('Total Images', len(match_annos)))
-        print('|{:^24}|{:^10}|{:^10}|'.format('Total Ribs Labeled', calc_df['BBoxes Read 1'].sum(), calc_df['BBoxes Read 2'].sum()))
-        print('|{:^24}|{:^10.5}|{:^10.5}|'.format('Avg. Ribs/Image', calc_df['BBoxes Read 1'].mean(), calc_df['BBoxes Read 2'].mean()))
-        print('|{:^24}|{:^10}|{:^10}|'.format('Median Ribs/Image', calc_df['BBoxes Read 1'].median(), calc_df['BBoxes Read 2'].median()))
-        print('|{:^24}|{:^10}|{:^10}|'.format('Min Ribs/Image', calc_df['BBoxes Read 1'].min(), calc_df['BBoxes Read 2'].min()))
-        print('|{:^24}|{:^10}|{:^10}|'.format('Max Ribs/Image', calc_df['BBoxes Read 1'].max(), calc_df['BBoxes Read 2'].max()))
-        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('Q1 Ribs/Image', calc_df['BBoxes Read 1'].quantile(0.25), calc_df['BBoxes Read 2'].quantile(0.25)))
-        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('Q3 Ribs/Image', calc_df['BBoxes Read 1'].quantile(0.75), calc_df['BBoxes Read 2'].quantile(0.75)))
-        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('IQR Ribs/Image', calc_df['BBoxes Read 1'].quantile(0.75) - calc_df['BBoxes Read 1'].quantile(0.25), calc_df['BBoxes Read 2'].quantile(0.75) - calc_df['BBoxes Read 2'].quantile(0.25)))
+        print('|{:^24}|{:^21}|'.format('Fracture Present Images', len(calc_df[calc_df['True Negatives'] == 0])))
+        print('|{:^24}|{:^21}|'.format('Fracture Absent Images', len(calc_df[calc_df['True Negatives'] == 1])))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Total Ribs Labeled', frac_pres_df['BBoxes Read 1'].sum(), frac_pres_df['BBoxes Read 2'].sum()))
+        print('|{:^24}|{:^10.5}|{:^10.5}|'.format('Avg. Ribs/Image', frac_pres_df['BBoxes Read 1'].mean(), frac_pres_df['BBoxes Read 2'].mean()))
+        print('|{:^24}|{:^10.5}|{:^10.5}|'.format('StdDev. Ribs/Image', frac_pres_df['BBoxes Read 1'].std(), frac_pres_df['BBoxes Read 2'].std()))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Min Ribs/Image', frac_pres_df['BBoxes Read 1'].min(), frac_pres_df['BBoxes Read 2'].min()))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Max Ribs/Image', frac_pres_df['BBoxes Read 1'].max(), frac_pres_df['BBoxes Read 2'].max()))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Median Ribs/Image', frac_pres_df['BBoxes Read 1'].median(), frac_pres_df['BBoxes Read 2'].median()))
+        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('Q1 Ribs/Image', frac_pres_df['BBoxes Read 1'].quantile(0.25), frac_pres_df['BBoxes Read 2'].quantile(0.25)))
+        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('Q3 Ribs/Image', frac_pres_df['BBoxes Read 1'].quantile(0.75), frac_pres_df['BBoxes Read 2'].quantile(0.75)))
+        print('|{:^24}|{:^10.2}|{:^10.2}|'.format('IQR Ribs/Image', frac_pres_df['BBoxes Read 1'].quantile(0.75) - frac_pres_df['BBoxes Read 1'].quantile(0.25), frac_pres_df['BBoxes Read 2'].quantile(0.75) - calc_df['BBoxes Read 2'].quantile(0.25)))
         print('|{}|'.format('-'*46))
         print('|{:^24}|{:^21.3}|'.format('IOU Threshold', iou_threshold))
         print('|{:^24}|{:^21.5}|'.format('Avg. Percent Overlap', all_overlaps.mean()))
@@ -282,6 +291,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21}|'.format('True Positives', true_pos))
         print('|{:^24}|{:^21}|'.format('False Positives', false_pos))
         print('|{:^24}|{:^21}|'.format('False Negatives', false_neg))
+        print('|{:^24}|{:^21}|'.format('True Negatives', true_neg))
         print('|{:^24}|{:^21.5}|'.format('Accuracy', accuracy))
         print('|{:^24}|{:^21.5}|'.format('Precision', precision))
         print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', recall))
@@ -289,6 +299,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21.5}|'.format('Cohen\'s Kappa', coh_kappa))
         print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', fr_kappa))
         print('')
+
 
 def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name='', model=None, model_conf=None):
     """
@@ -313,9 +324,8 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
     # Create an empty DataFrame to add calculations per image
     bbox_df = pd.DataFrame(columns=(['Patient', 'Read1 Box', 'Read1 Area', 'Read2 Box', 'Read2 Area', 'Result', 'Max IOU']))
 
-    for i, patient in enumerate(match_annos):
-        print_iter(len(match_annos), i, print_type='image')
-
+    pbar = tqdm(iterable=enumerate(match_annos), total=len(match_annos), desc='Calculating Metric DataFrame')
+    for _, patient in pbar:
         # Get first- and second-read bounding boxes for patient
         read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
         if model:
@@ -375,7 +385,6 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
                                           'Read2 Area' : calc_bbox_area(box2),
                                           'Result' : 'false_positive',
                                           'Max IOU' : 0}, ignore_index=True)
-    print('') # End print stream from loop
 
     # Output bbox_df to a file
     print('Writing to file...')
