@@ -93,11 +93,14 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
     # Load in DataFrame from CSV file
     bbox_df = pd.read_csv(filename, names=(['Patient', 'Read1 Box', 'Read1 Area', 'Read2 Box', 'Read2 Area', 'Result', 'Max IOU']))
 
+    # Remove fracture absent images from first read
+    first_reads = first_reads.dropna()
+
     # Loop through original/cropped images, draw annotations, and save JPEGs
     pbar = tqdm(iterable=enumerate(img_list), total=len(img_list), desc='Saving Annotated Images')
     for _, img_nm in pbar:
         # Pull the Patient ID from the annotations file
-        patient_id = img_nm[img_nm.rfind('Anon_'):-4]
+        patient_id = img_nm.split('/')[-1][:-4]
 
         # Pull current patient bounding boxes from the first read
         patient_read1 = first_reads[first_reads['ID'].str.contains(patient_id)]
@@ -314,6 +317,10 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
     save_name : str
         name to save the file as
     """
+    # Remove any rows containing NaN
+    first_reads = first_reads.dropna()
+    second_reads = second_reads.dropna()
+
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name[name.rfind('/')+1:] for name in first_reads.ID])
     read2_names = np.unique([name[name.rfind('/')+1:] for name in second_reads.ID])
@@ -339,7 +346,8 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
                 # Loop through each read 2 box and calculate the IOU with the current read 1 box
                 temp_ious = np.array([])
                 for box2 in read2_bboxes:
-                    temp_ious = np.append(temp_ious, intersection_over_union(box2, box1))
+                    tmp_iou, _ = intersection_over_union(box2, box1)
+                    temp_ious = np.append(temp_ious, tmp_iou)
 
                 # Pull out the largest IOU and corresponding index
                 max_ind = np.argmax(temp_ious)
@@ -389,6 +397,7 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
     # Output bbox_df to a file
     print('Writing to file...')
     bbox_df.to_csv(save_name, index=False)
+
 
 def compute_afroc(ground_truths, model_predictions, save_name=''):
     """
@@ -460,6 +469,7 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
         for threshold, llf, fpr in zip(sorted_scores, llf_list, fpr_list):
             out_file.write('{},{},{}\n'.format(threshold, llf, fpr))
 
+
 def main(parse_args):
     """Main Function"""
     # Import first and second reads
@@ -479,6 +489,8 @@ def main(parse_args):
     second_reads = second_reads.drop(columns=['Height', 'Width'])
 
     if parse_args.images:
+        if parse_args.model:
+            second_reads = second_reads[second_reads.Prob >= parse_args.model_conf]
         make_images(first_reads, second_reads, parse_args.images_path, parse_args.save_dir)
 
     if parse_args.color_images:
