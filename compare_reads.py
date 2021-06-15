@@ -21,7 +21,7 @@ from tqdm import tqdm
 from args import ARGS
 from general_utils import print_iter
 from eval_utils import (draw_box, get_bounding_boxes, calc_performance, calc_metric,
-                        calc_bbox_area, intersection_over_union)
+                        calc_bbox_area, calc_mAP, intersection_over_union)
 
 
 def make_images(first_reads, second_reads, im_path=None, save_dir=None):
@@ -261,8 +261,11 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         precision = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='precision')
         recall = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='recall')
         f1_score = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f1_score')
+        f2_score = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f2_score')
         coh_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='cohens_kappa')
         fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa_fr')
+
+        mAP = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=parser_args.iou_thresh)
 
     if verbose:
         frac_pres_df = calc_df[calc_df['True Negatives'] == 0]
@@ -292,10 +295,12 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21}|'.format('False Positives', false_pos))
         print('|{:^24}|{:^21}|'.format('False Negatives', false_neg))
         print('|{:^24}|{:^21}|'.format('True Negatives', true_neg))
+        print('|{:^24}|{:^21.5}|'.format(f'mAP@{round(parser_args.iou_thresh, 1)}', mAP))
         print('|{:^24}|{:^21.5}|'.format('Accuracy', accuracy))
         print('|{:^24}|{:^21.5}|'.format('Precision', precision))
         print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', recall))
         print('|{:^24}|{:^21.5}|'.format('F1 Score', f1_score))
+        print('|{:^24}|{:^21.5}|'.format('F2 Score', f2_score))
         print('|{:^24}|{:^21.5}|'.format('Cohen\'s Kappa', coh_kappa))
         print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', fr_kappa))
         print('')
@@ -469,14 +474,16 @@ def main(parse_args):
         first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
 
     if parse_args.model:
-        second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
+        if parse_args.old:
+            second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'x1', 'y1', 'x2', 'y2', 'Prob'))
+        else:
+            second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
     else:
         second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
 
     # Drop Height and Width columns
     if not parse_args.old:
         first_reads = first_reads.drop(columns=['Height', 'Width'])
-    second_reads = second_reads.drop(columns=['Height', 'Width'])
 
     if parse_args.images:
         make_images(first_reads, second_reads, parse_args.images_path, parse_args.save_dir)

@@ -299,7 +299,7 @@ def calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy'):
     Free-response Kappa: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/
     """
     if metric not in ('accuracy', 'precision', 'positive_predictive_value', 'recall', 'sensitivity',
-                      'f1_score', 'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr'):
+                      'f1_score', 'f2_score', 'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr'):
         raise ValueError('Unsupported metric string provided in calc_metric: ' + metric)
 
     if metric == 'accuracy':
@@ -315,6 +315,11 @@ def calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy'):
         precision = true_pos / float(true_pos + false_pos)
         recall = true_pos / float(true_pos + false_neg)
         return 2 * (precision * recall) / (precision + recall)
+
+    if metric == 'f2_score':
+        precision = true_pos / float(true_pos + false_pos)
+        recall = true_pos / float(true_pos + false_neg)
+        return (1 + 2**2) * (precision * recall) / (2**2 * precision + recall)
 
     if metric == 'false_positive_rate':
         return false_pos / float(false_pos + true_neg)
@@ -385,3 +390,167 @@ def calc_auc(afroc_df):
             auc += dx * (afroc_df['LLF'].iloc[i+1] + afroc_df['LLF'].iloc[i]) / 2
 
     return auc
+
+def calc_mAP(preds, annots, iou_threshold=0.3):
+    """
+    Evaluates detector predictions by mean average precision (mAP) at an IOU threshold. Adapted from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
+
+    Parameters
+    ----------
+    preds : DataFrame
+        DataFrame containing detector predicted boxes and scores (output of `output_model_predictions.py`)
+    annots : DataFrame
+        DataFrame containing ground truth boxes
+    iou_threshold : float
+        Intersection over union (IOU) threshold used for mAP. If a predicted box has IOU >= iou_threshold, then it is a true positive.
+
+    Returns
+    -------
+    """
+    # Add label column for fracture class (to conform to "all_annotations" desired format)
+    annots['label'] = 0
+
+    # Gather annotations in desired format
+    img_paths = list(set(annots['ID']))
+
+    all_annotations = [[None for i in range(1)] for j in range(len(img_paths))]
+    for i, img_path in enumerate(img_paths):
+        sub_annots = annots[annots['ID'] == img_path]
+
+        all_annotations[i][0] = sub_annots[['x1', 'y1', 'x2', 'y2', 'label']].values
+    
+    # Gather detections in desired format
+    all_detections = [[None for i in range(1)] for j in range(len(img_paths))]
+    for i, img_path in enumerate(img_paths):
+        sub_preds = preds[preds['ID'] == img_path]
+
+        all_detections[i][0] = sub_preds[['x1', 'y1', 'x2', 'y2', 'Prob']].values
+
+    average_precisions = {}
+
+    for label in range(1):
+        false_positives = np.zeros((0,))
+        true_positives  = np.zeros((0,))
+        scores          = np.zeros((0,))
+        num_annotations = 0.0
+
+        for i in range(len(img_paths)):
+            detections           = all_detections[i][label]
+            annotations          = all_annotations[i][label]
+            num_annotations     += annotations.shape[0]
+            detected_annotations = []
+
+            for d in detections:
+                scores = np.append(scores, d[4])
+
+                if annotations.shape[0] == 0:
+                    false_positives = np.append(false_positives, 1)
+                    true_positives  = np.append(true_positives, 0)
+                    continue
+
+                overlaps            = compute_overlap(np.expand_dims(d, axis=0), annotations)
+                assigned_annotation = np.argmax(overlaps, axis=1)
+                max_overlap         = overlaps[0, assigned_annotation]
+
+                if max_overlap >= iou_threshold and assigned_annotation not in detected_annotations:
+                    false_positives = np.append(false_positives, 0)
+                    true_positives  = np.append(true_positives, 1)
+                    detected_annotations.append(assigned_annotation)
+                else:
+                    false_positives = np.append(false_positives, 1)
+                    true_positives  = np.append(true_positives, 0)
+
+        # no annotations -> AP for this class is 0 (is this correct?)
+        if num_annotations == 0:
+            average_precisions[label] = 0, 0
+            continue
+
+        # sort by score
+        indices         = np.argsort(-scores)
+        false_positives = false_positives[indices]
+        true_positives  = true_positives[indices]
+
+        # compute false positives and true positives
+        false_positives = np.cumsum(false_positives)
+        true_positives  = np.cumsum(true_positives)
+
+        # compute recall and precision
+        recall    = true_positives / num_annotations
+        precision = true_positives / np.maximum(true_positives + false_positives, np.finfo(np.float64).eps)
+
+        # compute average precision
+        average_precision  = _compute_ap(recall, precision)
+        average_precisions[label] = average_precision, num_annotations
+
+    try:
+        mAP = average_precisions[0][0]
+
+        return mAP
+    except:
+        print('Some precision/recall/AP issue')
+        return 0
+
+def compute_overlap(a, b):
+    """
+    Compute pairwise IOUs between two lists of boxes. Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
+
+    Parameters
+    ----------
+    a : ndarray (float)
+        Numpy array of boxes of shape (N, 4)
+    b : ndarray (float)
+        Numpy array of boxes of shape (K, 4)
+
+    Returns
+    -------
+    overlaps : ndarray (float)
+        Numpy array of all pairwise IOUs between boxes in a and b of shape (N, K)
+    """
+    area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+
+    iw = np.minimum(np.expand_dims(a[:, 2], axis=1), b[:, 2]) - np.maximum(np.expand_dims(a[:, 0], 1), b[:, 0])
+    ih = np.minimum(np.expand_dims(a[:, 3], axis=1), b[:, 3]) - np.maximum(np.expand_dims(a[:, 1], 1), b[:, 1])
+
+    iw = np.maximum(iw, 0)
+    ih = np.maximum(ih, 0)
+
+    ua = np.expand_dims((a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1]), axis=1) + area - iw * ih
+
+    ua = np.maximum(ua, np.finfo(float).eps)
+
+    intersection = iw * ih
+
+    return intersection / ua
+
+def _compute_ap(recall, precision):
+    """
+    Compute average precision given recall and precision curves. Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
+
+    Parameters
+    ----------
+    recall : list (float)
+        list of recall values at each threshold
+    precision : list (float)
+        list of precision values at each threshold
+        
+    Returns
+    -------
+    ap : float
+        Average precision
+    """
+    # correct AP calculation
+    # first append sentinel values at the end
+    mrec = np.concatenate(([0.], recall, [1.]))
+    mpre = np.concatenate(([0.], precision, [0.]))
+
+    # compute the precision envelope
+    for i in range(mpre.size - 1, 0, -1):
+        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+
+    # to calculate area under PR curve, look for points
+    # where X axis (recall) changes value
+    i = np.where(mrec[1:] != mrec[:-1])[0]
+
+    # and sum (\Delta recall) * prec
+    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+    return ap
