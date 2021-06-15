@@ -143,14 +143,14 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False,
         # Loop through DataFrame to pull out bounding boxes and corresponding probabilities
         probs = []
         for _, row in subset_df.iterrows():
-            boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
+            boxes.append((int(row['x1']), int(row['y1']), int(row['x2']), int(row['y2'])))
             probs.append(row['Prob'])
 
         return boxes, probs
 
     # If no probabilities, just return boxes
     for _, row in subset_df.iterrows():
-        boxes.append((row['x1'], row['y1'], row['x2'], row['y2']))
+        boxes.append((int(row['x1']), int(row['y1']), int(row['x2']), int(row['y2'])))
 
     return boxes
 
