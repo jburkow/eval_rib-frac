@@ -17,6 +17,7 @@ import pandas as pd
 import cv2
 
 from tqdm import tqdm
+from sklearn.metrics import auc
 
 from args import ARGS
 from general_utils import print_iter
@@ -268,7 +269,8 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         coh_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='cohens_kappa')
         fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa_fr')
 
-        mAP = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=parser_args.iou_thresh)
+        mAP, fig = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=parser_args.iou_thresh)
+        fig.savefig('pr-curve.png', bbox_inches='tight', dpi=150)
 
     if verbose:
         frac_pres_df = calc_df[calc_df['True Negatives'] == 0]
@@ -418,7 +420,7 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
         name to save the file as
     """
     # Sort all the probabilities from the model
-    sorted_scores = model_predictions.Prob.sort_values()
+    sorted_scores = model_predictions.Prob.sort_values().values
 
     # Pull out unique PatientID.png from ID column of both reads
     gt_names = np.unique([name[name.rfind('/')+1:] for name in ground_truths.ID])
@@ -433,27 +435,27 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
     total_fractures = len(ground_truths)
     total_images = len(match_annos)
 
-    # Loop through sorted_scores and calculate LLF and FPR for each score
-    for i, threshold in enumerate(sorted_scores):
-        print_iter(sorted_scores.size, i, print_type='threshold')
+    # Get ground truth and predicted boxes for every patient (BEFORE the loop so we only do this once for each patient)
+    truth_boxes = [get_bounding_boxes(patient, anno_df=ground_truths) for patient in match_annos]
+    pred_boxes, pred_scores = [], []
+    for patient in match_annos:
+        b, s = get_bounding_boxes(patient, anno_df=model_predictions, has_probs=True)
+        pred_boxes.append(b)
+        pred_scores.append(s)
 
+    # Loop through sorted_scores and calculate LLF and FPR for each score
+    for i, threshold in tqdm(enumerate(sorted_scores), total=sorted_scores.size):
         total_true_pos = 0
         total_false_pos = 0
-        # Loop through each patient and compare ground truth and predicted bounding boxes
-        for _, patient in enumerate(match_annos):
-            # Get ground truths and box predictions for current patient
-            truth_boxes = get_bounding_boxes(patient, anno_df=ground_truths)
-            pred_boxes, prob_scores = get_bounding_boxes(patient, anno_df=model_predictions, has_probs=True)
 
-            good_preds = []
-            for box, score in zip(pred_boxes, prob_scores):
-                if score < threshold:
-                    continue
-                b = np.array(box, dtype=int)
-                good_preds.append(b)
+        # Loop through each patient and compare ground truth and predicted bounding boxes
+        for j, patient in enumerate(match_annos):
+            # Filter out predicted boxes below score threshold
+            keep = np.where(np.array(pred_scores[j]) >= threshold)[0]
+            good_preds = [np.array(pred_boxes[j][k], dtype=int) for k in keep]
 
             # Calculate number of true and false positives for current patient
-            true_pos, false_pos, _, _ = calc_performance(good_preds, truth_boxes)
+            true_pos, false_pos, _, _, _, _ = calc_performance(good_preds, truth_boxes[j], iou_threshold=parser_args.iou_thresh)
 
             # Add true and false positives to total for the current threshold
             total_true_pos += true_pos
@@ -473,6 +475,9 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
     with open(save_name, 'w') as out_file:
         for threshold, llf, fpr in zip(sorted_scores, llf_list, fpr_list):
             out_file.write('{},{},{}\n'.format(threshold, llf, fpr))
+
+    # Print area under AFROC curve
+    print(f'Area under AFROC: {auc(fpr_list, llf_list):.5f}')
 
 
 def main(parse_args):
