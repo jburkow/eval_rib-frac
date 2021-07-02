@@ -2,7 +2,7 @@
 Filename: compare_reads.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 05/18/2021
+Last Updated: 07/02/2021
 Description: Goes through two separate radiologist read annotation files
     and either creates images with annotations drawn on, or calculates
     a Kappa metric across the dataset.
@@ -12,6 +12,7 @@ import argparse
 import os
 import sys
 import time
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import cv2
@@ -20,7 +21,6 @@ from tqdm import tqdm
 from sklearn.metrics import auc
 
 from args import ARGS
-from general_utils import print_iter
 from eval_utils import (draw_box, get_bounding_boxes, calc_performance, calc_metric,
                         calc_bbox_area, calc_mAP, intersection_over_union)
 
@@ -44,8 +44,7 @@ def make_images(first_reads, second_reads, im_path=None, save_dir=None):
     img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files]
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
-    pbar = tqdm(iterable=enumerate(img_list), total=len(img_list), desc='Saving Annotated Images')
-    for _, img_nm in pbar:
+    for _, img_nm in tqdm(enumerate(img_list), desc='Saving Annotated Images', total=len(img_list)):
         # Pull the Patient ID from the annotations file
         patient_id = img_nm[img_nm.rfind('Anon_'):-4]
 
@@ -98,8 +97,7 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
     first_reads = first_reads.dropna()
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
-    pbar = tqdm(iterable=enumerate(img_list), total=len(img_list), desc='Saving Annotated Images')
-    for _, img_nm in pbar:
+    for _, img_nm in tqdm(iterable=enumerate(img_list), desc='Saving Annotated Images', total=len(img_list)):
         # Pull the Patient ID from the annotations file
         patient_id = img_nm.split('/')[-1][:-4]
 
@@ -186,8 +184,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
             # Create an empty DataFrame to add calculations per image
             calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
 
-            pbar = tqdm(iterable=enumerate(match_annos), total=len(match_annos), desc=f'Calculating Metrics at IOU {thresh}')
-            for _, patient in pbar:
+            for _, patient in tqdm(enumerate(match_annos), desc=f'Calculating Metrics at IOU {thresh}', total=len(match_annos)):
                 # Get first- and second-read bounding boxes for patient
                 read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
                 read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
@@ -222,18 +219,30 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         # Create an empty DataFrame to add calculations per image
         calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
 
+        # test_thresholds = [0.7360308285163777, 0.5626204238921002, 0.47398843930635837, 0.36608863198458574, 0.28709055876685935] #[0.6, 0.5, 0.4, 0.3]
+        # loop_thresholds = []
         all_overlaps = []
         all_ious = []
 
-        pbar = tqdm(iterable=enumerate(match_annos), total=len(match_annos), desc='Calculating Metrics')
-        for _, patient in pbar:
-
+        for _, patient in tqdm(enumerate(match_annos), desc='Calculating Metrics', total=len(match_annos)):
             # Get first- and second-read bounding boxes for patient
             read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
-            if model:
-                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
-            else:
+            if not model:
                 read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
+            else:
+                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
+                # print(f'\nOriginal Read2 BBoxes: {len(read2_bboxes)}')
+                # read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
+                # print(f'Read2 BBoxes with {test_thresholds[0]:.4%} conf: {len(read2_bboxes)}')
+                # num_model_boxes = 0
+                # for thresh in test_thresholds[1:]:
+                #     read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
+                #     print(f'Read2 BBoxes with {thresh:.4%} conf: {len(read2_bboxes)}')
+                #     if len(read2_bboxes) == num_model_boxes:
+                #         loop_thresholds.append(thresh)
+                #         break
+                #     num_model_boxes = len(read2_bboxes)
+
 
             # Calculate performance between bounding boxes
             true_pos, false_pos, false_neg, true_neg, ious, overlaps = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
@@ -269,8 +278,8 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         coh_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='cohens_kappa')
         fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa_fr')
 
-        mAP, fig = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=parser_args.iou_thresh)
-        fig.savefig('pr-curve.png', bbox_inches='tight', dpi=150)
+        # mAP, fig = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=iou_threshold)
+        # fig.savefig('pr-curve.png', bbox_inches='tight', dpi=150)
 
     if verbose:
         frac_pres_df = calc_df[calc_df['True Negatives'] == 0]
@@ -300,7 +309,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21}|'.format('False Positives', false_pos))
         print('|{:^24}|{:^21}|'.format('False Negatives', false_neg))
         print('|{:^24}|{:^21}|'.format('True Negatives', true_neg))
-        print('|{:^24}|{:^21.5}|'.format(f'mAP@{round(parser_args.iou_thresh, 1)}', mAP))
+        # print('|{:^24}|{:^21.5}|'.format(f'mAP@{round(parser_args.iou_thresh, 1)}', mAP))
         print('|{:^24}|{:^21.5}|'.format('Accuracy', accuracy))
         print('|{:^24}|{:^21.5}|'.format('Precision', precision))
         print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', recall))
@@ -309,6 +318,89 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21.5}|'.format('Cohen\'s Kappa', coh_kappa))
         print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', fr_kappa))
         print('')
+
+
+def optimize_thresh(first_reads, second_reads, iou_threshold=None, model=False, model_conf=None):
+    # Pull out unique PatientID.png from ID column of both reads
+    read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
+    read2_names = np.unique([name.split('/')[-1].upper() for name in second_reads.ID])
+
+    # Find matching PatientIDs
+    match_annos = np.intersect1d(read1_names, read2_names)
+    print(f'{len(match_annos)} MATCHING IDs -- TEST SET SIZE {len(read1_names)}')
+
+    # Create an empty DataFrame to add calculations per image
+    calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
+
+    # Each value is the percentage of the prior value for the threshold calculation
+    # (e.g., if a = 1, the first thresh is 1*0.736, and second is 1*0.736*0.764)
+    avalanche_percentages = [0.7360308285163777, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
+    # test_thresholds = [0.7360308285163777, 0.5626204238921002, 0.47398843930635837, 0.36608863198458574, 0.28709055876685935]
+
+    base_vals = []
+    precisions = []
+    recalls = []
+    f1_scores = []
+    f2_scores = []
+
+    # for base_val in [1.1, 1.05, 1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.6, 0]:
+    for base_val in reversed([1.1, 1.05, 1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.6, 0.55, 0.50, 0.45, 0.40]):
+        test_thresholds = [base_val * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
+
+        for _, patient in tqdm(enumerate(match_annos), desc=f'Calculating Metrics at {base_val=}', total=len(match_annos)):
+            # Get first- and second-read bounding boxes for patient
+            read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
+            if base_val == 0:
+                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
+            else:
+                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
+                num_model_boxes = len(read2_bboxes)
+                for thresh in test_thresholds[1:]:
+                    read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
+                    if len(read2_bboxes) >= num_model_boxes:
+                        num_model_boxes = len(read2_bboxes)
+                    else:
+                        break
+
+
+            # Calculate performance between bounding boxes
+            true_pos, false_pos, false_neg, true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
+
+            # Add values to calc_df
+            calc_df = calc_df.append({'Patient' : patient,
+                                      'BBoxes Read 1' : len(read1_bboxes),
+                                      'BBoxes Read 2' : len(read2_bboxes),
+                                      'True Positives' : true_pos,
+                                      'False Positives' : false_pos,
+                                      'False Negatives' : false_neg,
+                                      'True Negatives' : true_neg}, ignore_index=True)
+
+        # Pull out confusion matrix values and calculate metrics
+        true_pos, false_pos, false_neg, true_neg = calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), calc_df['True Negatives'].sum()
+
+        base_vals.append(base_val)
+        precisions.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='precision'))
+        recalls.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='recall'))
+        f1_scores.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f1_score'))
+        f2_scores.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f2_score'))
+
+    plt.figure(figsize=(14,8))
+    plt.style.use('dark_background')
+    # Plot lines of metrics across all base values
+    plt.plot(base_vals, precisions, 'b', label='Precision')
+    plt.plot(base_vals, recalls, 'y', label='Recall')
+    plt.plot(base_vals, f1_scores, 'g', label='F1')
+    plt.plot(base_vals, f2_scores, 'r', label='F2')
+    # Plot horizontal lines of metric values using a constant 0.50 model confidence
+    plt.plot([min(base_vals), max(base_vals)], [0.86364,0.86364], 'b--')
+    plt.plot([min(base_vals), max(base_vals)], [0.48718,0.48718], 'y--')
+    plt.plot([min(base_vals), max(base_vals)], [0.62295,0.62295], 'g--')
+    plt.plot([min(base_vals), max(base_vals)], [0.53371,0.53371], 'r--')
+    plt.xlabel('Base Values')
+    plt.ylabel('Metric Values')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig('avalanche_metrics.png')
 
 
 def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name='', model=None, model_conf=None):
@@ -338,8 +430,7 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
     # Create an empty DataFrame to add calculations per image
     bbox_df = pd.DataFrame(columns=(['Patient', 'Read1 Box', 'Read1 Area', 'Read2 Box', 'Read2 Area', 'Result', 'Max IOU']))
 
-    pbar = tqdm(iterable=enumerate(match_annos), total=len(match_annos), desc='Calculating Metric DataFrame')
-    for _, patient in pbar:
+    for _, patient in tqdm(enumerate(match_annos), desc='Calculating Metric DataFrame', total=len(match_annos)):
         # Get first- and second-read bounding boxes for patient
         read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
         if model:
@@ -444,7 +535,7 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
         pred_scores.append(s)
 
     # Loop through sorted_scores and calculate LLF and FPR for each score
-    for i, threshold in tqdm(enumerate(sorted_scores), total=sorted_scores.size):
+    for _, threshold in tqdm(enumerate(sorted_scores), total=sorted_scores.size):
         total_true_pos = 0
         total_false_pos = 0
 
@@ -489,10 +580,11 @@ def main(parse_args):
         first_reads = pd.read_csv(parse_args.first_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
 
     if parse_args.model:
-        if parse_args.old:
-            second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'x1', 'y1', 'x2', 'y2', 'Prob'))
-        else:
-            second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
+        # if parse_args.old:
+        #     second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'x1', 'y1', 'x2', 'y2', 'Prob'))
+        # else:
+        #     second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
+        second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
     else:
         second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
 
@@ -511,6 +603,10 @@ def main(parse_args):
     if parse_args.metrics:
         calculate_metrics(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
                           verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
+
+    if parse_args.optimize:
+        optimize_thresh(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
+                        model=parse_args.model, model_conf=parse_args.model_conf)
 
     save_dir = ARGS['COMPARE_READS_FOLDER'] if parse_args.save_dir is None else parse_args.save_dir
 
@@ -544,6 +640,9 @@ if __name__ == "__main__":
 
     parser.add_argument('--metrics', action='store_true',
                         help='Calculate various performance metrics and print them out to console.')
+
+    parser.add_argument('--optimize', action='store_true',
+                        help='Calculate the "best" thresholds based on an avalanching scheme.')
 
     parser.add_argument('--bboxes', action='store_true',
                         help='Calculate statistics on bounding boxes between two reads and save to a CSV.')
@@ -586,8 +685,8 @@ if __name__ == "__main__":
 
     parser_args = parser.parse_args()
 
-    if not any([parser_args.images, parser_args.color_images, parser_args.metrics, parser_args.bboxes, parser_args.plot, parser_args.afroc]):
-        parser.error('Please choose one of --images, --color_images, --metrics, --bboxes, --plot, or --afroc.')
+    if not any([parser_args.images, parser_args.color_images, parser_args.metrics, parser_args.optimize, parser_args.bboxes, parser_args.plot, parser_args.afroc]):
+        parser.error('Please choose one of --images, --color_images, --metrics, --optimize, --bboxes, --plot, or --afroc.')
 
     if parser_args.afroc and not parser_args.model:
         parser.error('Use --model flag when using --afroc.')
