@@ -2,16 +2,84 @@
 Filename: eval_utils.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 05/18/2021
+Last Updated: 07/13/2021
 Description: Various utility functions used for evaluating performance
     of the model on detection.
 '''
 
-import sys
 import cv2
 import numpy as np
 import pandas as pd
 from scipy.integrate import simps
+
+
+class MetricsConfMatrix:
+    """
+    Class to calculate various metrics given the values from a confusion matrix.
+
+    Notes
+    -----
+    Wikipedia page for metric names and formulas: https://en.wikipedia.org/wiki/Confusion_matrix
+    """
+    def __init__(self, true_pos, false_pos, false_neg, true_neg):
+        """
+        Parameters
+        ----------
+        true_pos : int
+            number of true positives between reads (in both read 1 and 2)
+        false_pos : int
+            number of false positives between reads (in read 2 but not 1)
+        false_neg : int
+            number of false negatives between reads (in read 1 but not 2)
+        true_neg : int
+            number of true negatives between reads (in neither read 1 or 2)
+        """
+        self.true_pos = true_pos
+        self.false_pos = false_pos
+        self.false_neg = false_neg
+        self.true_neg = true_neg
+
+        self.total_events = float(true_pos + false_pos + false_neg + true_neg)
+
+    def accuracy(self):
+        """Calculate accuracy."""
+        return (self.true_pos + self.true_neg) / self.total_events
+
+    def precision(self):
+        """Calculate precision."""
+        return self.true_pos / float(self.true_pos + self.false_pos)
+
+    def recall(self):
+        """Calculate recall."""
+        return self.true_pos / float(self.true_pos + self.false_neg)
+
+    def f1_score(self):
+        """Calculate F1 score."""
+        return 2 * (self.precision() * self.recall()) / (self.precision() + self.recall())
+
+    def f2_score(self):
+        """Calculate F2 score."""
+        return (1 + 2**2) * (self.precision() * self.recall()) / (2**2 * self.precision() + self.recall())
+
+    def fpr(self):
+        """Calculate false positive rate."""
+        return self.false_pos / float(self.false_pos + self.true_neg)
+
+    def cohens_kappa(self):
+        """Calculate Cohen's Kappa."""
+        # Calculate observed proportionate agreement
+        obs_agree = (self.true_pos + self.true_neg) / self.total_events
+        # Calculate probability of randomly marking
+        prop_yes = ((self.true_pos + self.false_neg) / self.total_events) * ((self.true_pos + self.false_pos) / self.total_events)
+        # Calculate probability of randomly not marking
+        prop_no = ((self.true_neg + self.false_pos) / self.total_events) * ((self.true_neg + self.false_neg) / self.total_events)
+        # Add prop_yes and prop_no for probability of random agreement
+        prop_e = prop_yes + prop_no
+        return (obs_agree - prop_e) / (1 - prop_e)
+
+    def free_kappa(self):
+        """Calculate Free-Response Kappa (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/)."""
+        return 2 * self.true_pos / float(self.false_pos + self.false_neg + 2 * self.true_pos)
 
 
 def pytorch_resize(image, min_side=608, max_side=1024):
@@ -49,47 +117,6 @@ def pytorch_resize(image, min_side=608, max_side=1024):
     image = np.transpose(image, (0, 3, 1, 2))
 
     return image, scale
-
-
-def draw_box(image, box, color, thickness=2):
-    """
-    Draw a bounding box on the image.
-
-    Parameters
-    ----------
-    image : ndarray
-        the image to draw on
-    box : list, [x1, y1, x2, y2]
-        top left and bottom right coordinates of the bounding box
-    color : list, [B,G,R]
-        color to make the box
-    thickness : int
-        thickness/width of the bounding box lines
-    """
-    box = np.array(box).astype(int)
-    cv2.rectangle(image, (box[0], box[1]), (box[2], box[3]), color, thickness, cv2.LINE_AA)
-
-
-def draw_caption(image, box, caption, loc=''):
-    """
-    Write a caption above or below the bounding box.
-
-    Parameters
-    ----------
-    image : ndarray
-        the image to write on
-    box : list, [x1, y1, x2, y2]
-        top left and bottom right coordinates of the bounding box
-    caption : str
-        text string to write on image
-    """
-    box = np.array(box).astype(int)
-    if loc == 'bottom':
-        cv2.putText(image, caption, (box[0], box[3] + 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
-        cv2.putText(image, caption, (box[0], box[3] + 10), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
-    else:
-        cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
-        cv2.putText(image, caption, (box[0], box[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
 
 def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False, conf_threshold=0.00):
@@ -252,8 +279,8 @@ def calc_performance(predictions, truths, iou_threshold=0.50):
         for truth in truths:
             temp_iou, temp_overlap = intersection_over_union(box, truth)
             if temp_iou > iou_threshold:
-                iou = temp_iou if temp_iou > iou else iou
-                overlap = temp_overlap if temp_overlap > overlap else overlap
+                iou = max(temp_iou, iou)
+                overlap = max(temp_overlap, overlap)
         if iou == 0: # If no IoUs > iou_threshold, count as false positives
             false_pos += 1
         else:
@@ -273,75 +300,6 @@ def calc_performance(predictions, truths, iou_threshold=0.50):
     return true_pos, false_pos, false_neg, true_neg, ious, overlaps
 
 
-def calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy'):
-    """
-    Given the values from a confusion matrix, calculate various evaluation metrics.
-
-    Parameters
-    ----------
-    true_pos : int
-        number of true positives between reads (agreements)
-    false_pos : int
-        number of false positives between reads (in read 2 but not 1)
-    false_neg : int
-        number of false negatives between reads (in read 1 but not 2)
-    true_neg : int
-        number of true negatives between reads (in neither read 1 or 2)
-    metric : str
-        metric to calculate; acceptable strings:
-        ('accuracy', 'precision', 'positive_predictive_value', 'recall', 'sensitivity', 'f1_score',
-         'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr')
-
-    Notes
-    -----
-    Wikipedia page for metric names and formulas: https://en.wikipedia.org/wiki/Confusion_matrix
-
-    Free-response Kappa: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/
-    """
-    if metric not in ('accuracy', 'precision', 'positive_predictive_value', 'recall', 'sensitivity',
-                      'f1_score', 'f2_score', 'true_positive_rate', 'false_positive_rate', 'cohens_kappa', 'kappa_fr'):
-        raise ValueError('Unsupported metric string provided in calc_metric: ' + metric)
-
-    if metric == 'accuracy':
-        return (true_pos + true_neg) / float(true_pos + false_pos + false_neg + true_neg)
-
-    if metric in ('precision', 'positive_predictive_value'):
-        return true_pos / float(true_pos + false_pos)
-
-    if metric in ('recall', 'sensitivity', 'true_positive_rate'):
-        return true_pos / float(true_pos + false_neg)
-
-    if metric == 'f1_score':
-        precision = true_pos / float(true_pos + false_pos)
-        recall = true_pos / float(true_pos + false_neg)
-        return 2 * (precision * recall) / (precision + recall)
-
-    if metric == 'f2_score':
-        precision = true_pos / float(true_pos + false_pos)
-        recall = true_pos / float(true_pos + false_neg)
-        return (1 + 2**2) * (precision * recall) / (2**2 * precision + recall)
-
-    if metric == 'false_positive_rate':
-        return false_pos / float(false_pos + true_neg)
-
-    if metric == 'cohens_kappa':
-        # Sum the total number of events
-        sum_events = float(true_pos + false_pos + false_neg + true_neg)
-        # Calculate observed proportionate agreement
-        obs_agree = (true_pos + true_neg) / sum_events
-        # Calculate probability of randomly marking
-        prop_yes = ((true_pos + false_neg) / sum_events) * ((true_pos + false_pos) / sum_events)
-        # Calculate probability of randomly not marking
-        prop_no = ((true_neg + false_pos) / sum_events) * ((true_neg + false_neg) / sum_events)
-        # Add prop_yes and prop_no for probability of random agreement
-        prop_e = prop_yes + prop_no
-        # Calculate Cohen's Kappa
-        coh_kappa = (obs_agree - prop_e) / (1 - prop_e)
-        return coh_kappa
-
-    if metric == 'kappa_fr':
-        return 2 * true_pos / float(false_pos + false_neg + 2 * true_pos)
-
 def calc_bbox_area(box):
     """
     Calculates the pixel area of the bounding box.
@@ -360,10 +318,8 @@ def calc_bbox_area(box):
     bbox_height = box[3] - box[1]
     bbox_width = box[2] - box[0]
 
-    # Calculate area of the bounding box
-    bbox_area = bbox_height * bbox_width
+    return bbox_height * bbox_width
 
-    return bbox_area
 
 def calc_auc(afroc_df):
     """
@@ -393,7 +349,8 @@ def calc_auc(afroc_df):
 
 def calc_mAP(preds, annots, iou_threshold=0.3):
     """
-    Evaluates detector predictions by mean average precision (mAP) at an IOU threshold. Adapted from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
+    Evaluates detector predictions by mean average precision (mAP) at an IOU threshold.
+    Adapted from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
 
     Parameters
     ----------
@@ -418,7 +375,7 @@ def calc_mAP(preds, annots, iou_threshold=0.3):
         sub_annots = annots[annots['ID'] == img_path]
 
         all_annotations[i][0] = sub_annots[['x1', 'y1', 'x2', 'y2', 'label']].values
-    
+
     # Gather detections in desired format
     all_detections = [[None for i in range(1)] for j in range(len(img_paths))]
     for i, img_path in enumerate(img_paths):
@@ -492,7 +449,8 @@ def calc_mAP(preds, annots, iou_threshold=0.3):
 
 def compute_overlap(a, b):
     """
-    Compute pairwise IOUs between two lists of boxes. Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
+    Compute pairwise IOUs between two lists of boxes.
+    Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
 
     Parameters
     ----------
@@ -524,7 +482,8 @@ def compute_overlap(a, b):
 
 def _compute_ap(recall, precision):
     """
-    Compute average precision given recall and precision curves. Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
+    Compute average precision given recall and precision curves.
+    Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
 
     Parameters
     ----------
@@ -532,7 +491,7 @@ def _compute_ap(recall, precision):
         list of recall values at each threshold
     precision : list (float)
         list of precision values at each threshold
-        
+
     Returns
     -------
     ap : float
