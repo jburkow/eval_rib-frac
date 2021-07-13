@@ -2,7 +2,7 @@
 Filename: compare_reads.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 07/02/2021
+Last Updated: 07/13/2021
 Description: Goes through two separate radiologist read annotation files
     and either creates images with annotations drawn on, or calculates
     a Kappa metric across the dataset.
@@ -21,8 +21,9 @@ from tqdm import tqdm
 from sklearn.metrics import auc
 
 from args import ARGS
-from eval_utils import (draw_box, get_bounding_boxes, calc_performance, calc_metric,
-                        calc_bbox_area, calc_mAP, intersection_over_union)
+from plot_utils import draw_box
+from eval_utils import (get_bounding_boxes, calc_performance,
+                        calc_bbox_area, calc_mAP, intersection_over_union, MetricsConfMatrix)
 
 
 def make_images(first_reads, second_reads, im_path=None, save_dir=None):
@@ -190,7 +191,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                 read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
 
                 # Calculate performance between bounding boxes
-                true_pos, false_pos, false_neg,  true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=thresh)
+                true_pos, false_pos, false_neg, true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=thresh)
 
                 # Add values to calc_df
                 calc_df = calc_df.append({'Patient' : patient,
@@ -201,12 +202,15 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                                           'False Negatives' : false_neg,
                                           'True Negatives' : true_neg}, ignore_index=True)
 
-            accuracy = calc_metric(calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), 0, metric='accuracy')
-            recall = calc_metric(calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), 0, metric='recall')
+            # Create a Metrics object with the confusion matrix totals
+            metric_calc = MetricsConfMatrix(calc_df['True Positives'].sum(),
+                                            calc_df['False Positives'].sum(),
+                                            calc_df['False Negatives'].sum(),
+                                            calc_df['True Negatives'].sum()) #for some reason used 0 before?
 
             # Add values to lists
-            accuracies.append(accuracy)
-            recalls.append(recall)
+            accuracies.append(metric_calc.accuracy())
+            recalls.append(metric_calc.recall())
 
         # Write accuracies, recalls, and thresholds to CSV
         print('Writing to file...')
@@ -266,20 +270,14 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         all_overlaps = np.array(all_overlaps)
         all_ious = np.array(all_ious)
 
-        # Pull out confusion matrix values and calculate metrics
-        true_pos, false_pos, false_neg, true_neg = calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), calc_df['True Negatives'].sum()
+        # Create a Metrics object with the confusion matrix totals
+        metric_calc = MetricsConfMatrix(calc_df['True Positives'].sum(),
+                                        calc_df['False Positives'].sum(),
+                                        calc_df['False Negatives'].sum(),
+                                        calc_df['True Negatives'].sum())
 
-        # Calculate various metrics
-        accuracy = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='accuracy')
-        precision = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='precision')
-        recall = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='recall')
-        f1_score = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f1_score')
-        f2_score = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f2_score')
-        coh_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='cohens_kappa')
-        fr_kappa = calc_metric(true_pos, false_pos, false_neg, true_neg, metric='kappa_fr')
-
-        # mAP, fig = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=iou_threshold)
-        # fig.savefig('pr-curve.png', bbox_inches='tight', dpi=150)
+        mAP, fig = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=iou_threshold)
+        fig.savefig('pr-curve.png', bbox_inches='tight', dpi=150)
 
     if verbose:
         frac_pres_df = calc_df[calc_df['True Negatives'] == 0]
@@ -305,22 +303,35 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21.5}|'.format('Avg. IOU', all_ious.mean()))
         print('|{:^24}|{:^21.3}|'.format('Model Confidence', model_conf if model else ''))
         print('|{}|'.format('-'*46))
-        print('|{:^24}|{:^21}|'.format('True Positives', true_pos))
-        print('|{:^24}|{:^21}|'.format('False Positives', false_pos))
-        print('|{:^24}|{:^21}|'.format('False Negatives', false_neg))
-        print('|{:^24}|{:^21}|'.format('True Negatives', true_neg))
-        # print('|{:^24}|{:^21.5}|'.format(f'mAP@{round(parser_args.iou_thresh, 1)}', mAP))
-        print('|{:^24}|{:^21.5}|'.format('Accuracy', accuracy))
-        print('|{:^24}|{:^21.5}|'.format('Precision', precision))
-        print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', recall))
-        print('|{:^24}|{:^21.5}|'.format('F1 Score', f1_score))
-        print('|{:^24}|{:^21.5}|'.format('F2 Score', f2_score))
-        print('|{:^24}|{:^21.5}|'.format('Cohen\'s Kappa', coh_kappa))
-        print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', fr_kappa))
+        print('|{:^24}|{:^21}|'.format('True Positives', metric_calc.true_pos))
+        print('|{:^24}|{:^21}|'.format('False Positives', metric_calc.false_pos))
+        print('|{:^24}|{:^21}|'.format('False Negatives', metric_calc.false_neg))
+        print('|{:^24}|{:^21}|'.format('True Negatives', metric_calc.true_neg))
+        print('|{:^24}|{:^21.5}|'.format(f'mAP@{round(parser_args.iou_thresh, 1)}', mAP))
+        print('|{:^24}|{:^21.5}|'.format('Accuracy', metric_calc.accuracy()))
+        print('|{:^24}|{:^21.5}|'.format('Precision', metric_calc.precision()))
+        print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', metric_calc.recall()))
+        print('|{:^24}|{:^21.5}|'.format('F1 Score', metric_calc.f1_score()))
+        print('|{:^24}|{:^21.5}|'.format('F2 Score', metric_calc.f2_score()))
+        print('|{:^24}|{:^21.5}|'.format('Cohen\'s Kappa', metric_calc.cohens_kappa()))
+        print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', metric_calc.free_kappa()))
         print('')
 
 
-def optimize_thresh(first_reads, second_reads, iou_threshold=None, model=False, model_conf=None):
+def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
+    """
+    Loop through all possible model confidence value and calculate the performance of the model with
+    and without an avalanche decision scheme.
+
+    Parameters
+    ----------
+    first_reads : DataFrame
+        contains image and bounding box locations from the first radiologist reads
+    second_reads : DataFrame
+        contains image and bounding box locations from the second radiologist reads
+    iou_threshold : float
+        threshold at which to consider bounding box overlap as a true positive
+    """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
     read2_names = np.unique([name.split('/')[-1].upper() for name in second_reads.ID])
@@ -331,37 +342,55 @@ def optimize_thresh(first_reads, second_reads, iou_threshold=None, model=False, 
 
     # Create an empty DataFrame to add calculations per image
     calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
+    calc_df_standard = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
 
     # Each value is the percentage of the prior value for the threshold calculation
     # (e.g., if a = 1, the first thresh is 1*0.736, and second is 1*0.736*0.764)
-    avalanche_percentages = [0.7360308285163777, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
-    # test_thresholds = [0.7360308285163777, 0.5626204238921002, 0.47398843930635837, 0.36608863198458574, 0.28709055876685935]
+    # avalanche_percentages = [0.7360308285163777, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
+    avalanche_percentages = [1, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
+    # avalanche_percentages = [1, 1-0.7643979057591623, 1-0.8424657534246576, 1-0.7723577235772358, 1-0.7842105263157895]
+    base_val_list = np.arange(0, 100) / 100.0
 
-    base_vals = []
-    precisions = []
-    recalls = []
-    f1_scores = []
-    f2_scores = []
+    standard_metrics = np.zeros((base_val_list.size, 4))
+    changing_metrics = np.zeros((base_val_list.size, 4))
 
-    # for base_val in [1.1, 1.05, 1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.6, 0]:
-    for base_val in reversed([1.1, 1.05, 1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.6, 0.55, 0.50, 0.45, 0.40]):
+    for k, base_val in enumerate(base_val_list):
         test_thresholds = [base_val * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
 
         for _, patient in tqdm(enumerate(match_annos), desc=f'Calculating Metrics at {base_val=}', total=len(match_annos)):
-            # Get first- and second-read bounding boxes for patient
+            # Pull boxes from ground truth/first reads
             read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
-            if base_val == 0:
-                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
-            else:
-                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
-                num_model_boxes = len(read2_bboxes)
-                for thresh in test_thresholds[1:]:
-                    read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
-                    if len(read2_bboxes) >= num_model_boxes:
-                        num_model_boxes = len(read2_bboxes)
-                    else:
-                        break
 
+            # Get the standard, unchanging metrics for each base value
+            read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=base_val)
+
+            # Calculate performance between bounding boxes
+            true_pos, false_pos, false_neg, true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
+
+            # Add values to calc_df_standard
+            calc_df_standard = calc_df_standard.append({'Patient' : patient,
+                                                        'BBoxes Read 1' : len(read1_bboxes),
+                                                        'BBoxes Read 2' : len(read2_bboxes),
+                                                        'True Positives' : true_pos,
+                                                        'False Positives' : false_pos,
+                                                        'False Negatives' : false_neg,
+                                                        'True Negatives' : true_neg}, ignore_index=True)
+
+            # Get initial number of boxes from list of thresholds
+            read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
+            num_model_boxes = len(read2_bboxes)
+
+            prior_num_model_boxes = 0
+            while(num_model_boxes > prior_num_model_boxes):
+                prior_num_model_boxes = num_model_boxes
+                # Set threshold level based on number of already accepted fractures
+                test_thresh_ind = min(len(test_thresholds)-1, num_model_boxes)
+                thresh = test_thresholds[test_thresh_ind]
+                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
+                num_model_boxes = len(read2_bboxes)
+
+                if(test_thresh_ind == len(test_thresholds)):
+                    break
 
             # Calculate performance between bounding boxes
             true_pos, false_pos, false_neg, true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
@@ -375,31 +404,43 @@ def optimize_thresh(first_reads, second_reads, iou_threshold=None, model=False, 
                                       'False Negatives' : false_neg,
                                       'True Negatives' : true_neg}, ignore_index=True)
 
-        # Pull out confusion matrix values and calculate metrics
-        true_pos, false_pos, false_neg, true_neg = calc_df['True Positives'].sum(), calc_df['False Positives'].sum(), calc_df['False Negatives'].sum(), calc_df['True Negatives'].sum()
+        # Create a Metrics object with the confusion matrix totals and calculate metrics for standard confidence
+        metric_calc_standard = MetricsConfMatrix(calc_df_standard['True Positives'].sum(),
+                                                 calc_df_standard['False Positives'].sum(),
+                                                 calc_df_standard['False Negatives'].sum(),
+                                                 calc_df_standard['True Negatives'].sum())
+        standard_metrics[k, 0] = metric_calc_standard.precision()
+        standard_metrics[k, 1] = metric_calc_standard.recall()
+        standard_metrics[k, 2] = metric_calc_standard.f1_score()
+        standard_metrics[k, 3] = metric_calc_standard.f2_score()
 
-        base_vals.append(base_val)
-        precisions.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='precision'))
-        recalls.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='recall'))
-        f1_scores.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f1_score'))
-        f2_scores.append(calc_metric(true_pos, false_pos, false_neg, true_neg, metric='f2_score'))
+        # Create a Metrics object with the confusion matrix totals and calculate metrics for avalanche confidence
+        metric_calc = MetricsConfMatrix(calc_df['True Positives'].sum(),
+                                        calc_df['False Positives'].sum(),
+                                        calc_df['False Negatives'].sum(),
+                                        calc_df['True Negatives'].sum())
+        changing_metrics[k, 0] = metric_calc.precision()
+        changing_metrics[k, 1] = metric_calc.recall()
+        changing_metrics[k, 2] = metric_calc.f1_score()
+        changing_metrics[k, 3] = metric_calc.f2_score()
 
-    plt.figure(figsize=(14,8))
+    plt.figure(figsize=(14, 8))
     plt.style.use('dark_background')
-    # Plot lines of metrics across all base values
-    plt.plot(base_vals, precisions, 'b', label='Precision')
-    plt.plot(base_vals, recalls, 'y', label='Recall')
-    plt.plot(base_vals, f1_scores, 'g', label='F1')
-    plt.plot(base_vals, f2_scores, 'r', label='F2')
-    # Plot horizontal lines of metric values using a constant 0.50 model confidence
-    plt.plot([min(base_vals), max(base_vals)], [0.86364,0.86364], 'b--')
-    plt.plot([min(base_vals), max(base_vals)], [0.48718,0.48718], 'y--')
-    plt.plot([min(base_vals), max(base_vals)], [0.62295,0.62295], 'g--')
-    plt.plot([min(base_vals), max(base_vals)], [0.53371,0.53371], 'r--')
-    plt.xlabel('Base Values')
+    # Plot avalanche scheme lines
+    plt.plot(base_val_list, changing_metrics[:, 0], 'b', label='Precision')
+    plt.plot(base_val_list, changing_metrics[:, 1], 'y', label='Recall')
+    plt.plot(base_val_list, changing_metrics[:, 2], 'g', label='F1')
+    plt.plot(base_val_list, changing_metrics[:, 3], 'r', label='F2')
+    # Plot standard model confidence lines
+    plt.plot(base_val_list, standard_metrics[:, 0], 'b--')
+    plt.plot(base_val_list, standard_metrics[:, 1], 'y--')
+    plt.plot(base_val_list, standard_metrics[:, 2], 'g--')
+    plt.plot(base_val_list, standard_metrics[:, 3], 'r--')
+    plt.xlabel('Starting Model Confidence')
     plt.ylabel('Metric Values')
     plt.legend()
     plt.tight_layout()
+    # plt.savefig('avalanche_metrics_backwards.png')
     plt.savefig('avalanche_metrics.png')
 
 
@@ -481,7 +522,7 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
                                           'Result' : 'false_negative',
                                           'Max IOU' : 0}, ignore_index=True)
         # If there are still read 2 boxes after looping through all read 1 boxes, add to DataFrame
-        # as false positrives
+        # as false positives
         if len(read2_bboxes) > 0:
             for box2 in read2_bboxes:
                 bbox_df = bbox_df.append({'Patient' : patient,
@@ -605,8 +646,7 @@ def main(parse_args):
                           verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
 
     if parse_args.optimize:
-        optimize_thresh(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
-                        model=parse_args.model, model_conf=parse_args.model_conf)
+        avalanche_scheme(first_reads, second_reads, iou_threshold=parse_args.iou_thresh)
 
     save_dir = ARGS['COMPARE_READS_FOLDER'] if parse_args.save_dir is None else parse_args.save_dir
 
@@ -641,8 +681,8 @@ if __name__ == "__main__":
     parser.add_argument('--metrics', action='store_true',
                         help='Calculate various performance metrics and print them out to console.')
 
-    parser.add_argument('--optimize', action='store_true',
-                        help='Calculate the "best" thresholds based on an avalanching scheme.')
+    parser.add_argument('--avalanche', action='store_true',
+                        help='Test thresholds based on an avalanching scheme; outputs image.')
 
     parser.add_argument('--bboxes', action='store_true',
                         help='Calculate statistics on bounding boxes between two reads and save to a CSV.')
@@ -685,8 +725,8 @@ if __name__ == "__main__":
 
     parser_args = parser.parse_args()
 
-    if not any([parser_args.images, parser_args.color_images, parser_args.metrics, parser_args.optimize, parser_args.bboxes, parser_args.plot, parser_args.afroc]):
-        parser.error('Please choose one of --images, --color_images, --metrics, --optimize, --bboxes, --plot, or --afroc.')
+    if not any([parser_args.images, parser_args.color_images, parser_args.metrics, parser_args.avalanche, parser_args.bboxes, parser_args.plot, parser_args.afroc]):
+        parser.error('Please choose one of --images, --color_images, --metrics, --avalanche, --bboxes, --plot, or --afroc.')
 
     if parser_args.afroc and not parser_args.model:
         parser.error('Use --model flag when using --afroc.')
