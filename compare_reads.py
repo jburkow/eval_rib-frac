@@ -318,7 +318,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('')
 
 
-def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
+def avalanche_scheme(first_reads, second_reads, iou_threshold=None, method="rational"):
     """
     Loop through all possible model confidence value and calculate the performance of the model with
     and without an avalanche decision scheme.
@@ -331,6 +331,8 @@ def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
         contains image and bounding box locations from the second radiologist reads
     iou_threshold : float
         threshold at which to consider bounding box overlap as a true positive
+    method : str
+        scheme to determine model confidence to keep predicted boxes
     """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
@@ -340,57 +342,65 @@ def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
     match_annos = np.intersect1d(read1_names, read2_names)
     print(f'{len(match_annos)} MATCHING IDs -- TEST SET SIZE {len(read1_names)}')
 
-    # Create an empty DataFrame to add calculations per image
-    calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
-    calc_df_standard = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="")
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="rational")
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="drastic")
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.05)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.10)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.15)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.20)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.25)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.30)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.35)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.40)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.45)
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.50)
+
+
+def avalanche_calc(first_reads, second_reads, match_annos, iou_threshold=None, method="", rate=0.05):
 
     # Each value is the percentage of the prior value for the threshold calculation
     # (e.g., if a = 1, the first thresh is 1*0.736, and second is 1*0.736*0.764)
-    # avalanche_percentages = [0.7360308285163777, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
-    avalanche_percentages = [1, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
-    # avalanche_percentages = [1, 1-0.7643979057591623, 1-0.8424657534246576, 1-0.7723577235772358, 1-0.7842105263157895]
-    base_val_list = np.arange(0, 100) / 100.0
+    if method == "rational":
+        avalanche_percentages = [1, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
+    elif method == "drastic":
+        avalanche_percentages = [1, 1-0.7643979057591623, 1-0.8424657534246576, 1-0.7723577235772358, 1-0.7842105263157895] #SHOW / WRITE ABOUT THIS IN PAPER
+    elif method == "avalanche":
+        avalanche_percentages = [1-rate for _ in range(10)]
+        avalanche_percentages.insert(0, 1)
+    else:
+        avalanche_percentages = []
 
-    standard_metrics = np.zeros((base_val_list.size, 4))
-    changing_metrics = np.zeros((base_val_list.size, 4))
+    # Create an empty DataFrame to add calculations per image
+    calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
+    metrics_df = pd.DataFrame(columns=(['base_val', 'precision', 'recall', 'f1_score', 'f2_score']))
 
-    for k, base_val in enumerate(base_val_list):
-        test_thresholds = [base_val * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
-
+    # for base_val in np.arange(0, 21) / 20.0:
+    for base_val in np.arange(0, 101) / 100.0:
         for _, patient in tqdm(enumerate(match_annos), desc=f'Calculating Metrics at {base_val=}', total=len(match_annos)):
             # Pull boxes from ground truth/first reads
             read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
 
-            # Get the standard, unchanging metrics for each base value
-            read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=base_val)
-
-            # Calculate performance between bounding boxes
-            true_pos, false_pos, false_neg, true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
-
-            # Add values to calc_df_standard
-            calc_df_standard = calc_df_standard.append({'Patient' : patient,
-                                                        'BBoxes Read 1' : len(read1_bboxes),
-                                                        'BBoxes Read 2' : len(read2_bboxes),
-                                                        'True Positives' : true_pos,
-                                                        'False Positives' : false_pos,
-                                                        'False Negatives' : false_neg,
-                                                        'True Negatives' : true_neg}, ignore_index=True)
-
-            # Get initial number of boxes from list of thresholds
-            read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
-            num_model_boxes = len(read2_bboxes)
-
-            prior_num_model_boxes = 0
-            while(num_model_boxes > prior_num_model_boxes):
-                prior_num_model_boxes = num_model_boxes
-                # Set threshold level based on number of already accepted fractures
-                test_thresh_ind = min(len(test_thresholds)-1, num_model_boxes)
-                thresh = test_thresholds[test_thresh_ind]
-                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
+            if method in ["avalanche", "rational", "drastic"]:
+                test_thresholds = [base_val * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
+                # Get initial number of boxes from list of thresholds
+                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
                 num_model_boxes = len(read2_bboxes)
 
-                if(test_thresh_ind == len(test_thresholds)):
-                    break
+                prior_num_model_boxes = 0
+                while num_model_boxes > prior_num_model_boxes:
+                    prior_num_model_boxes = num_model_boxes
+                    # Set threshold level based on number of already accepted fractures
+                    test_thresh_ind = min(len(test_thresholds)-1, num_model_boxes)
+                    thresh = test_thresholds[test_thresh_ind]
+                    read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
+                    num_model_boxes = len(read2_bboxes)
+
+                    if(test_thresh_ind == len(test_thresholds)):
+                        break
+            else:
+                # Get the standard, unchanging metrics for each base value
+                read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=base_val)
 
             # Calculate performance between bounding boxes
             true_pos, false_pos, false_neg, true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
@@ -404,45 +414,19 @@ def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
                                       'False Negatives' : false_neg,
                                       'True Negatives' : true_neg}, ignore_index=True)
 
-        # Create a Metrics object with the confusion matrix totals and calculate metrics for standard confidence
-        metric_calc_standard = MetricsConfMatrix(calc_df_standard['True Positives'].sum(),
-                                                 calc_df_standard['False Positives'].sum(),
-                                                 calc_df_standard['False Negatives'].sum(),
-                                                 calc_df_standard['True Negatives'].sum())
-        standard_metrics[k, 0] = metric_calc_standard.precision()
-        standard_metrics[k, 1] = metric_calc_standard.recall()
-        standard_metrics[k, 2] = metric_calc_standard.f1_score()
-        standard_metrics[k, 3] = metric_calc_standard.f2_score()
-
         # Create a Metrics object with the confusion matrix totals and calculate metrics for avalanche confidence
         metric_calc = MetricsConfMatrix(calc_df['True Positives'].sum(),
                                         calc_df['False Positives'].sum(),
                                         calc_df['False Negatives'].sum(),
                                         calc_df['True Negatives'].sum())
-        changing_metrics[k, 0] = metric_calc.precision()
-        changing_metrics[k, 1] = metric_calc.recall()
-        changing_metrics[k, 2] = metric_calc.f1_score()
-        changing_metrics[k, 3] = metric_calc.f2_score()
 
-    plt.figure(figsize=(14, 8))
-    plt.style.use('dark_background')
-    # Plot avalanche scheme lines
-    plt.plot(base_val_list, changing_metrics[:, 0], 'b', label='Precision')
-    plt.plot(base_val_list, changing_metrics[:, 1], 'y', label='Recall')
-    plt.plot(base_val_list, changing_metrics[:, 2], 'g', label='F1')
-    plt.plot(base_val_list, changing_metrics[:, 3], 'r', label='F2')
-    # Plot standard model confidence lines
-    plt.plot(base_val_list, standard_metrics[:, 0], 'b--')
-    plt.plot(base_val_list, standard_metrics[:, 1], 'y--')
-    plt.plot(base_val_list, standard_metrics[:, 2], 'g--')
-    plt.plot(base_val_list, standard_metrics[:, 3], 'r--')
-    plt.xlabel('Starting Model Confidence')
-    plt.ylabel('Metric Values')
-    plt.legend()
-    plt.tight_layout()
-    # plt.savefig('avalanche_metrics_backwards.png')
-    plt.savefig('avalanche_metrics.png')
+        metrics_df = metrics_df.append({'base_val'  : base_val,
+                                        'precision' : metric_calc.precision(),
+                                        'recall'    : metric_calc.recall(),
+                                        'f1_score'  : metric_calc.f1_score(),
+                                        'f2_score'  : metric_calc.f2_score()}, ignore_index=True)
 
+    metrics_df.to_csv(f'out_files/metrics_{"standard" if method == "" else method}{"_" + str(rate) if method == "avalanche" else ""}.csv', index=False)
 
 def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name='', model=None, model_conf=None):
     """
@@ -645,7 +629,7 @@ def main(parse_args):
         calculate_metrics(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
                           verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
 
-    if parse_args.optimize:
+    if parse_args.avalanche:
         avalanche_scheme(first_reads, second_reads, iou_threshold=parse_args.iou_thresh)
 
     save_dir = ARGS['COMPARE_READS_FOLDER'] if parse_args.save_dir is None else parse_args.save_dir
