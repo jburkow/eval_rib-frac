@@ -2,7 +2,7 @@
 Filename: compare_reads.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 07/13/2021
+Last Updated: 07/30/2021
 Description: Goes through two separate radiologist read annotation files
     and either creates images with annotations drawn on, or calculates
     a Kappa metric across the dataset.
@@ -10,9 +10,7 @@ Description: Goes through two separate radiologist read annotation files
 
 import argparse
 import os
-import sys
 import time
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import cv2
@@ -42,29 +40,32 @@ def make_images(first_reads, second_reads, im_path=None, save_dir=None):
         path to save images with drawn-on annotations
     """
     # Define list of images
-    img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files]
+    # img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files] # For annotating all images 
+    img_list = first_reads['ID'].unique() # Annotating only a test set
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
     for _, img_nm in tqdm(enumerate(img_list), desc='Saving Annotated Images', total=len(img_list)):
         # Pull the Patient ID from the annotations file
-        patient_id = img_nm[img_nm.rfind('Anon_'):-4]
+        patient_id = img_nm.split('/')[-1].replace('.png', '')
 
         # Set temp DataFrames to pull annotations from
-        patient_read1 = first_reads[first_reads['ID'].str.contains(patient_id)]
-        patient_read2 = second_reads[second_reads['ID'].str.contains(patient_id)]
+        patient_read1 = first_reads[first_reads['ID'].str.contains(patient_id, case=False)]
+        patient_read2 = second_reads[second_reads['ID'].str.contains(patient_id, case=False)]
 
         # Import image
         img = cv2.imread(img_nm)
 
         # Loop through first read annotations and draw boxes
-        for _, row in patient_read1.iterrows():
-            box = [row[1], row[2], row[3], row[4]]
-            draw_box(img, box, [255, 255, 0]) # cv2 saves JPG as BGR -> this is teal
+        for row in patient_read1.itertuples():
+            if not pd.isnull(row[-1]):
+                box = [int(row[2]), int(row[3]), int(row[4]), int(row[5])]
+                draw_box(img, box, [255, 255, 0], thickness=4) # cv2 saves JPG as BGR -> this is teal
 
         # Loop through second read annotations and draw boxes
-        for _, row in patient_read2.iterrows():
-            box = [row[1], row[2], row[3], row[4]]
-            draw_box(img, box, [0, 255, 255]) # cv2 saves JPG as BGR -> this is yellow
+        for row in patient_read2.itertuples():
+            if not pd.isnull(row[-1]):
+                box = [int(row[2]), int(row[3]), int(row[4]), int(row[5])]
+                draw_box(img, box, [0, 255, 255], thickness=4) # cv2 saves JPG as BGR -> this is yellow
 
         # Save image to file
         save_to = ARGS['COMPARE_READS_IMAGES_FOLDER'] if save_dir is None else save_dir
@@ -100,7 +101,7 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
     # Loop through original/cropped images, draw annotations, and save JPEGs
     for _, img_nm in tqdm(iterable=enumerate(img_list), desc='Saving Annotated Images', total=len(img_list)):
         # Pull the Patient ID from the annotations file
-        patient_id = img_nm.split('/')[-1][:-4]
+        patient_id = img_nm.split('/')[-1].replace('.png', '')
 
         # Pull current patient bounding boxes from the first read
         patient_read1 = first_reads[first_reads['ID'].str.contains(patient_id)]
@@ -111,11 +112,11 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
         # Pull current patient bounding boxes from comparison CSV file
         patient_bboxes = bbox_df[bbox_df['Patient'].str.contains(patient_id)]
 
-        # Set box colors
-        box_color_gt = [255, 255, 0] # cv2 saves JPG as BGR -> this is teal
-        box_color_tp = [0, 255, 0] # cv2 saves JPG as BGR -> this is green
-        box_color_fp = [0, 255, 255] # cv2 saves JPG as BGR -> this is yellow
-        box_color_fn = [0, 0, 255] # cv2 saves JPG as BGR -> this is red
+        # Define box colors in BGR format
+        box_color_gt = [255, 255, 0] # teal
+        box_color_tp = [0, 255, 0]   # green
+        box_color_fp = [0, 255, 255] # yellow
+        box_color_fn = [0, 0, 255]   # red
 
         # Import image
         img = cv2.imread(img_nm)
@@ -223,8 +224,6 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         # Create an empty DataFrame to add calculations per image
         calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
 
-        # test_thresholds = [0.7360308285163777, 0.5626204238921002, 0.47398843930635837, 0.36608863198458574, 0.28709055876685935] #[0.6, 0.5, 0.4, 0.3]
-        # loop_thresholds = []
         all_overlaps = []
         all_ious = []
 
@@ -235,18 +234,6 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                 read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
             else:
                 read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
-                # print(f'\nOriginal Read2 BBoxes: {len(read2_bboxes)}')
-                # read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
-                # print(f'Read2 BBoxes with {test_thresholds[0]:.4%} conf: {len(read2_bboxes)}')
-                # num_model_boxes = 0
-                # for thresh in test_thresholds[1:]:
-                #     read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
-                #     print(f'Read2 BBoxes with {thresh:.4%} conf: {len(read2_bboxes)}')
-                #     if len(read2_bboxes) == num_model_boxes:
-                #         loop_thresholds.append(thresh)
-                #         break
-                #     num_model_boxes = len(read2_bboxes)
-
 
             # Calculate performance between bounding boxes
             true_pos, false_pos, false_neg, true_neg, ious, overlaps = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
@@ -276,8 +263,8 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                                         calc_df['False Negatives'].sum(),
                                         calc_df['True Negatives'].sum())
 
-        mAP, fig = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=iou_threshold)
-        fig.savefig('pr-curve.png', bbox_inches='tight', dpi=150)
+        mAP = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=iou_threshold)
+        curr_auc = compute_afroc(first_reads, second_reads, no_save=True)
 
     if verbose:
         frac_pres_df = calc_df[calc_df['True Negatives'] == 0]
@@ -313,12 +300,13 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', metric_calc.recall()))
         print('|{:^24}|{:^21.5}|'.format('F1 Score', metric_calc.f1_score()))
         print('|{:^24}|{:^21.5}|'.format('F2 Score', metric_calc.f2_score()))
+        print('|{:^24}|{:^21.5}|'.format('AUC', curr_auc))
         print('|{:^24}|{:^21.5}|'.format('Cohen\'s Kappa', metric_calc.cohens_kappa()))
         print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', metric_calc.free_kappa()))
         print('')
 
 
-def avalanche_scheme(first_reads, second_reads, iou_threshold=None, method="rational"):
+def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
     """
     Loop through all possible model confidence value and calculate the performance of the model with
     and without an avalanche decision scheme.
@@ -331,8 +319,6 @@ def avalanche_scheme(first_reads, second_reads, iou_threshold=None, method="rati
         contains image and bounding box locations from the second radiologist reads
     iou_threshold : float
         threshold at which to consider bounding box overlap as a true positive
-    method : str
-        scheme to determine model confidence to keep predicted boxes
     """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
@@ -343,8 +329,8 @@ def avalanche_scheme(first_reads, second_reads, iou_threshold=None, method="rati
     print(f'{len(match_annos)} MATCHING IDs -- TEST SET SIZE {len(read1_names)}')
 
     avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="")
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="rational")
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="drastic")
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="conservative")
+    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="posterior")
     avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.05)
     avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.10)
     avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.15)
@@ -358,30 +344,51 @@ def avalanche_scheme(first_reads, second_reads, iou_threshold=None, method="rati
 
 
 def avalanche_calc(first_reads, second_reads, match_annos, iou_threshold=None, method="", rate=0.05):
+    """
+    Create a detailed metric CSV with Precision, Recall, F1, and F2 scores across the entire range
+    of possible model confidences, with choice between standard or avalanche confidence schemes.
 
+    Parameters
+    ----------
+    first_reads : DataFrame
+        contains image and bounding box locations from the first radiologist reads
+    second_reads : DataFrame
+        contains image and bounding box locations from the second radiologist reads
+    match_annos : ndarray
+        list of matching patient IDs from both reads
+    iou_threshold : float
+        threshold at which to consider bounding box overlap as a true positive
+    method : str
+        which avalanche scheme to use
+    rate : float, optional
+        constant rate to decrease each successive step of avalanche scheme
+    """
     # Each value is the percentage of the prior value for the threshold calculation
     # (e.g., if a = 1, the first thresh is 1*0.736, and second is 1*0.736*0.764)
-    if method == "rational":
+    if method == "conservative":
         avalanche_percentages = [1, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]
-    elif method == "drastic":
-        avalanche_percentages = [1, 1-0.7643979057591623, 1-0.8424657534246576, 1-0.7723577235772358, 1-0.7842105263157895] #SHOW / WRITE ABOUT THIS IN PAPER
+    elif method == "posterior":
+        avalanche_percentages = [1, 1-0.7643979057591623, 1-0.8424657534246576, 1-0.7723577235772358, 1-0.7842105263157895]
     elif method == "avalanche":
         avalanche_percentages = [1-rate for _ in range(10)]
         avalanche_percentages.insert(0, 1)
     else:
         avalanche_percentages = []
 
-    # Create an empty DataFrame to add calculations per image
-    calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives']))
+    # Create an empty DataFrame to add cumulative metrics across the dataset per base value
     metrics_df = pd.DataFrame(columns=(['base_val', 'precision', 'recall', 'f1_score', 'f2_score']))
 
     # for base_val in np.arange(0, 21) / 20.0:
-    for base_val in np.arange(0, 101) / 100.0:
-        for _, patient in tqdm(enumerate(match_annos), desc=f'Calculating Metrics at {base_val=}', total=len(match_annos)):
+    for base_val in np.arange(0, 1.01, 0.05):
+        # Create an empty DataFrame to add calculations per image
+        # Placed here so that it is reset for each base value
+        calc_df = pd.DataFrame(columns=(['Patient', 'BBoxes Read 1', 'BBoxes Read 2', 'True Positives', 'False Positives', 'False Negatives', 'True Negatives'])) 
+        for _, patient in tqdm(enumerate(match_annos), desc=f'Calculating Metrics at {base_val=:.2}', total=len(match_annos)):
             # Pull boxes from ground truth/first reads
             read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
+            # print(f'{read1_bboxes=}')
 
-            if method in ["avalanche", "rational", "drastic"]:
+            if method in ["avalanche", "conservative", "posterior"]:
                 test_thresholds = [base_val * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
                 # Get initial number of boxes from list of thresholds
                 read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=test_thresholds[0])
@@ -396,12 +403,13 @@ def avalanche_calc(first_reads, second_reads, match_annos, iou_threshold=None, m
                     read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=thresh)
                     num_model_boxes = len(read2_bboxes)
 
-                    if(test_thresh_ind == len(test_thresholds)):
+                    if test_thresh_ind == len(test_thresholds):
                         break
             else:
                 # Get the standard, unchanging metrics for each base value
                 read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=base_val)
 
+            # print(f'{read2_bboxes=}')
             # Calculate performance between bounding boxes
             true_pos, false_pos, false_neg, true_neg, _, _ = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
 
@@ -420,13 +428,15 @@ def avalanche_calc(first_reads, second_reads, match_annos, iou_threshold=None, m
                                         calc_df['False Negatives'].sum(),
                                         calc_df['True Negatives'].sum())
 
-        metrics_df = metrics_df.append({'base_val'  : base_val,
+        metrics_df = metrics_df.append({'base_val'  : round(base_val, 2),
                                         'precision' : metric_calc.precision(),
                                         'recall'    : metric_calc.recall(),
                                         'f1_score'  : metric_calc.f1_score(),
                                         'f2_score'  : metric_calc.f2_score()}, ignore_index=True)
+    # print(metrics_df)
+    filename = f'metrics_{"standard" if method == "" else method}{"_" + str(rate) if method == "avalanche" else ""}'
+    metrics_df.to_csv(f'out_files/{filename}.csv', index=False)
 
-    metrics_df.to_csv(f'out_files/metrics_{"standard" if method == "" else method}{"_" + str(rate) if method == "avalanche" else ""}.csv', index=False)
 
 def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name='', model=None, model_conf=None):
     """
@@ -522,7 +532,7 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
     bbox_df.to_csv(save_name, index=False)
 
 
-def compute_afroc(ground_truths, model_predictions, save_name=''):
+def compute_afroc(ground_truths, model_predictions, save_name='', no_save=False):
     """
     Calculates LLF and FPR for each threshold to plot an AFROC curve of the model performance
 
@@ -534,6 +544,8 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
         contains image and bounding box locations with probabilities from the neural network
     save_name : str
         name to save the file as
+    no_save : bool
+        determines whether to save the afroc values to a file or just output AUC
     """
     # Sort all the probabilities from the model
     sorted_scores = model_predictions.Prob.sort_values().values
@@ -586,6 +598,9 @@ def compute_afroc(ground_truths, model_predictions, save_name=''):
         llf_list.append(curr_llf)
         fpr_list.append(est_fpr)
 
+    if no_save:
+        return auc(fpr_list, llf_list)
+    
     # Output values to a file
     print('Writing to file...')
     with open(save_name, 'w') as out_file:
@@ -609,7 +624,11 @@ def main(parse_args):
         #     second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'x1', 'y1', 'x2', 'y2', 'Prob'))
         # else:
         #     second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
-        second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
+        second_reads = pd.read_csv(parse_args.second_read_csv, header=0)
+        if len(second_reads.columns) > 6:
+            second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2', 'Prob'))
+        else:
+            second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'x1', 'y1', 'x2', 'y2', 'Prob'))
     else:
         second_reads = pd.read_csv(parse_args.second_read_csv, names=('ID', 'Height', 'Width', 'x1', 'y1', 'x2', 'y2'))
 
@@ -618,8 +637,8 @@ def main(parse_args):
         first_reads = first_reads.drop(columns=['Height', 'Width'])
 
     if parse_args.images:
-        if parse_args.model:
-            second_reads = second_reads[second_reads.Prob >= parse_args.model_conf]
+        # if parse_args.model:
+        #     second_reads = second_reads[second_reads.Prob >= parse_args.model_conf]
         make_images(first_reads, second_reads, parse_args.images_path, parse_args.save_dir)
 
     if parse_args.color_images:
@@ -725,4 +744,4 @@ if __name__ == "__main__":
     # Print out time to complete
     print('Done!')
     end_time = time.perf_counter()
-    print('Execution finished in {} seconds.'.format(round(end_time - start_time, 3)))
+    print(f'Execution finished in {end_time - start_time:.3f} seconds.')
