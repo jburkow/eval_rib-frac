@@ -2,7 +2,7 @@
 Filename: eval_utils.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 07/13/2021
+Last Updated: 07/30/2021
 Description: Various utility functions used for evaluating performance
     of the model on detection.
 '''
@@ -47,23 +47,28 @@ class MetricsConfMatrix:
 
     def precision(self):
         """Calculate precision."""
-        return self.true_pos / float(self.true_pos + self.false_pos)
+        return 0 if float(self.true_pos + self.false_pos) == 0 else \
+            self.true_pos / float(self.true_pos + self.false_pos)
 
     def recall(self):
         """Calculate recall."""
-        return self.true_pos / float(self.true_pos + self.false_neg)
+        return 0 if float(self.true_pos + self.false_neg) == 0 else \
+            self.true_pos / float(self.true_pos + self.false_neg)
 
     def f1_score(self):
         """Calculate F1 score."""
-        return 2 * (self.precision() * self.recall()) / (self.precision() + self.recall())
+        return 0 if (self.precision() + self.recall()) == 0 else \
+            2 * (self.precision() * self.recall()) / (self.precision() + self.recall())
 
     def f2_score(self):
         """Calculate F2 score."""
-        return (1 + 2**2) * (self.precision() * self.recall()) / (2**2 * self.precision() + self.recall())
+        return 0 if (2**2 * self.precision() + self.recall()) == 0 else \
+            (1 + 2**2)*(self.precision() * self.recall()) / (2**2*self.precision() + self.recall())
 
     def fpr(self):
         """Calculate false positive rate."""
-        return self.false_pos / float(self.false_pos + self.true_neg)
+        return 0 if float(self.false_pos + self.true_neg) == 0 else \
+            self.false_pos / float(self.false_pos + self.true_neg)
 
     def cohens_kappa(self):
         """Calculate Cohen's Kappa."""
@@ -79,7 +84,8 @@ class MetricsConfMatrix:
 
     def free_kappa(self):
         """Calculate Free-Response Kappa (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/)."""
-        return 2 * self.true_pos / float(self.false_pos + self.false_neg + 2 * self.true_pos)
+        return 0 if float(self.false_pos + self.false_neg + 2 * self.true_pos) == 0 else \
+            2 * self.true_pos / float(self.false_pos + self.false_neg + 2 * self.true_pos)
 
 
 def pytorch_resize(image, min_side=608, max_side=1024):
@@ -154,7 +160,7 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False,
 
     # If any values are NaN (i.e., there are no fractures labeled), return empty lists
     if subset_df.isnull().values.any():
-        return ([],[]) if has_probs else []
+        return ([], []) if has_probs else []
 
     # Make an empty list to append possible bounding boxes to
     boxes = []
@@ -165,7 +171,7 @@ def get_bounding_boxes(patient_nm, anno_df=None, info_loc=None, has_probs=False,
 
         # If the resultant DataFrame is empty, return empty lists
         if len(subset_df) == 0:
-            return ([],[]) if has_probs else []
+            return ([], []) if has_probs else []
 
         # Loop through DataFrame to pull out bounding boxes and corresponding probabilities
         probs = []
@@ -220,7 +226,7 @@ def intersection_over_union(predict_box, truth_box):
     return iou, overlap
 
 
-def calc_performance(predictions, truths, iou_threshold=0.50):
+def calc_performance_OLD(predictions, truths, iou_threshold=0.50):
     """
     Calculate how well the model performs at predicting the correct
     bounding boxes. Performance is measured in terms of how many
@@ -300,6 +306,64 @@ def calc_performance(predictions, truths, iou_threshold=0.50):
     return true_pos, false_pos, false_neg, true_neg, ious, overlaps
 
 
+def calc_performance(predictions, truths, iou_threshold=0.50):
+    """
+    Calculate how well the model performs at predicting the correct
+    bounding boxes. Performance is measured in terms of how many
+    true positives, false negatives, and false positives the model outputs.
+
+    Parameters
+    ----------
+    predictions : list
+        list of lists of bounding boxes predicted by the model
+    truths : list
+        list of lists of ground truth bounding boxes
+    iou_threshold : float
+        IOU value to be considered true positive
+
+    Returns
+    -------
+    true_pos : int
+        number of true positives
+    false_pos : int
+        number of false positives
+    false_neg : int
+        number of false negatives
+    true_neg : int
+        1 only if there are no predictions and no truths, else 0
+    ious : list
+        list of intersection-over-union values for each box pair
+    overlaps : list
+        list of overlap values for each box pair
+    """
+    # Initialize arrays for IOU and % Overlap for each bounding box pair
+    iou_array = np.zeros((len(predictions), len(truths)))
+    overlap_array = np.zeros_like(iou_array)
+
+    for i, pred in enumerate(predictions):
+        for k, truth in enumerate(truths):
+            temp_iou, temp_overlap = intersection_over_union(pred, truth)
+            if temp_iou >= iou_threshold:
+                iou_array[i, k] = temp_iou
+                overlap_array[i, k] = temp_overlap
+
+    true_pos  = np.where(iou_array.any(axis=0))[0].size  # Counts columns containing nonzero values
+    false_pos = np.where(~iou_array.any(axis=1))[0].size # Counts rows containing only zeros
+    false_neg = np.where(~iou_array.any(axis=0))[0].size # Counts columns containing only zeros
+    true_neg  = 1 if iou_array.shape == (0, 0) else 0
+
+    ious = []
+    overlaps = []
+    # Get IOU and overlap values into lists to be returned
+    for k in range(iou_array.shape[1]):
+        col_k = iou_array[:, k]
+        if col_k.sum():
+            ious.append(col_k.max())
+            overlaps.append(overlap_array[np.argmax(col_k), k])
+
+    return true_pos, false_pos, false_neg, true_neg, ious, overlaps
+
+
 def calc_bbox_area(box):
     """
     Calculates the pixel area of the bounding box.
@@ -339,7 +403,7 @@ def calc_auc(afroc_df):
     auc = simps(afroc_df['LLF'], afroc_df['Threshold'])
 
     # Backup AUC calculation if Simpson's Rule fails
-    if not auc >= 0.0 and not auc <= 1.0:
+    if auc < 0.0 and auc > 1.0:
         auc = 0
         for i in range(len(afroc_df) - 1):
             dx = afroc_df['Threshold'].iloc[i+1] - afroc_df['Threshold'].iloc[i]
@@ -510,6 +574,4 @@ def _compute_ap(recall, precision):
     # where X axis (recall) changes value
     i = np.where(mrec[1:] != mrec[:-1])[0]
 
-    # and sum (\Delta recall) * prec
-    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
-    return ap
+    return np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
