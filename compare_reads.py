@@ -147,7 +147,7 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
 
 
 def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=False, model=False,
-                      model_conf=None, save_name=''):
+                      model_conf=None, bootstrap_iters=0, save_name=''):
     """
     Calculates various performance metrics across the two reads.
 
@@ -304,6 +304,42 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21.5}|'.format('Cohen\'s Kappa', metric_calc.cohens_kappa()))
         print('|{:^24}|{:^21.5}|'.format('Free-Response Kappa', metric_calc.free_kappa()))
         print('')
+
+        # Bootstrapping to obtain 95% CIs and measures of variation in precision, recall, and F2 score
+        if bootstrap_iters > 0:
+            boot_precisions, boot_recalls, boot_f2s = [], [], []
+            for i in tqdm(range(bootstrap_iters), desc='Bootstrapping...'):
+                # Take stratified bootstrap sample: n_pos fracture-present cases w/ replacement + n_neg fracture-absent cases w/ replacement
+                bootstrap_df_pos = calc_df[calc_df['BBoxes Read 1'] > 0].sample(frac=1, replace=True, random_state=i)
+                bootstrap_df_neg = calc_df[calc_df['BBoxes Read 1'] == 0].sample(frac=1, replace=True, random_state=i)
+                bootstrap_df = pd.concat([bootstrap_df_pos, bootstrap_df_neg])
+
+                true_pos, false_pos, false_neg, true_neg = bootstrap_df['True Positives'].sum(), bootstrap_df['False Positives'].sum(), bootstrap_df['False Negatives'].sum(), bootstrap_df['True Negatives'].sum()
+
+                boot_metric_calc = MetricsConfMatrix(true_pos, false_pos, false_neg, true_neg)
+
+                precision = boot_metric_calc.precision()
+                recall = boot_metric_calc.recall()
+                f2_score = boot_metric_calc.f2_score()
+
+                boot_precisions.append(precision)
+                boot_recalls.append(recall)
+                boot_f2s.append(f2_score)
+
+            sorted_boot_precisions = sorted(boot_precisions)
+            sorted_boot_recalls = sorted(boot_recalls)
+            sorted_boot_f2s = sorted(boot_f2s)
+
+            boot_precision_lb, boot_precision_ub = sorted_boot_precisions[int(0.05*len(sorted_boot_precisions))], sorted_boot_precisions[int(0.95*len(sorted_boot_precisions))]
+            boot_recall_lb, boot_recall_ub = sorted_boot_recalls[int(0.05*len(sorted_boot_recalls))], sorted_boot_recalls[int(0.95*len(sorted_boot_recalls))]
+            boot_f2_lb, boot_f2_ub = sorted_boot_f2s[int(0.05*len(sorted_boot_f2s))], sorted_boot_f2s[int(0.95*len(sorted_boot_f2s))]
+
+            print(f'95% CI for Precision: ({boot_precision_lb:.5f}, {boot_precision_ub:.5f}) | CI Length: {boot_precision_ub-boot_precision_lb:.5f}')
+            print(f'\tMean +/- std for Precision: {np.mean(boot_precisions):.5f} +/- {np.std(boot_precisions):.5f} | Coeff. of Variation: {np.std(boot_precisions)/np.mean(boot_precisions):.5f}')
+            print(f'95% CI for Recall: ({boot_recall_lb:.5f}, {boot_recall_ub:.5f}) | CI Length: {boot_recall_ub-boot_recall_lb:.5f}')
+            print(f'\tMean +/- std for Recall: {np.mean(boot_recalls):.5f} +/- {np.std(boot_recalls):.5f} | Coeff. of Variation: {np.std(boot_recalls)/np.mean(boot_recalls):.5f}')
+            print(f'95% CI for F2 Score: ({boot_f2_lb:.5f}, {boot_f2_ub:.5f}) | CI Length: {boot_f2_ub-boot_f2_lb:.5f}')
+            print(f'\tMean +/- std for F2 Score: {np.mean(boot_f2s):.5f} +/- {np.std(boot_f2s):.5f} | Coeff. of Variation: {np.std(boot_f2s)/np.mean(boot_f2s):.5f}')
 
 
 def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
@@ -646,7 +682,7 @@ def main(parse_args):
 
     if parse_args.metrics:
         calculate_metrics(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
-                          verbose=True, model=parse_args.model, model_conf=parse_args.model_conf)
+                          verbose=True, model=parse_args.model, model_conf=parse_args.model_conf, bootstrap_iters=parse_args.bootstrap_iters)
 
     if parse_args.avalanche:
         avalanche_scheme(first_reads, second_reads, iou_threshold=parse_args.iou_thresh)
@@ -725,6 +761,10 @@ if __name__ == "__main__":
 
     parser.add_argument('--filename',
                         help='Name to save file as.')
+
+    parser.add_argument('--bootstrap_iters', type=int, default=0,
+                        help='Number of bootstrap samples to take of test set for confidence intervals. 0 if no bootstrapping desired.')
+
 
     parser_args = parser.parse_args()
 
