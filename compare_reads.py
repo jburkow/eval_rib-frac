@@ -1,8 +1,7 @@
 '''
 Filename: compare_reads.py
-Author: Jonathan Burkow, burkowjo@msu.edu
-        Michigan State University
-Last Updated: 07/30/2021
+Author: Jonathan Burkow (burkowjo@msu.edu), Michigan State University
+Last Updated: 08/11/2021
 Description: Goes through two separate radiologist read annotation files
     and either creates images with annotations drawn on, or calculates
     a Kappa metric across the dataset.
@@ -11,36 +10,37 @@ Description: Goes through two separate radiologist read annotation files
 import argparse
 import os
 import time
+from typing import Iterable, Union, Optional
 import numpy as np
 import pandas as pd
 import cv2
 
 from tqdm import tqdm
 from sklearn.metrics import auc
+from scipy.linalg import block_diag
 
 from args import ARGS
 from plot_utils import draw_box
-from eval_utils import (get_bounding_boxes, calc_performance,
+from eval_utils import (get_bounding_boxes, calc_performance, calc_performance_OLD,
                         calc_bbox_area, calc_mAP, intersection_over_union, MetricsConfMatrix)
 
 
-def make_images(first_reads, second_reads, im_path=None, save_dir=None):
+def make_images(first_reads: pd.DataFrame,
+                second_reads: pd.DataFrame,
+                im_path: Optional[str] = None,
+                save_dir: Optional[str] = None) -> None:
     """
     Creates new image files with drawn-on annotations from both reads.
 
     Parameters
     ----------
-    first_reads : DataFrame
-        contains image and bounding box locations from the first radiologist reads
-    second_reads : DataFrame
-        contains image and bounding box locations from the second radiologist reads
-    im_path : str
-        path containing images to draw annotations on
-    save_dir : str
-        path to save images with drawn-on annotations
+    first_reads  : DataFrame with image and bounding box locations from the first radiologist reads
+    second_reads : DataFrame with image and bounding box locations from the second radiologist reads
+    im_path      : path containing images to draw annotations on
+    save_dir     : path to save images with drawn-on annotations
     """
     # Define list of images
-    # img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files] # For annotating all images 
+    # img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files] # For annotating all images
     img_list = first_reads['ID'].unique() # Annotating only a test set
 
     # Loop through original/cropped images, draw annotations, and save JPEGs
@@ -72,7 +72,10 @@ def make_images(first_reads, second_reads, im_path=None, save_dir=None):
         cv2.imwrite(os.path.join(save_to, patient_id + '.jpg'), img)
 
 
-def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
+def make_images_from_file(filename: str,
+                          first_reads: pd.DataFrame,
+                          im_path: Optional[str] = None,
+                          save_dir: Optional[str] = None) -> None:
     """
     Creates new image files with drawn-on annotations from both reads. Uses a pre-made CSV file
     with bounding boxes from both reads already classified as true positive, false positive, and
@@ -80,14 +83,10 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
 
     Parameters
     ----------
-    filename : str
-        path to the CSV file containing both read bounding box information
-    first_reads : DataFrame
-        contains image and bounding box locations from the first radiologist reads
-    im_path : str
-        path containing images to draw annotations on
-    save_dir : str
-        path to save images with drawn-on annotations
+    filename    : path to the CSV file containing both read bounding box information
+    first_reads : DataFrame with image and bounding box locations from the first radiologist reads
+    im_path     : path containing images to draw annotations on
+    save_dir    : path to save images with drawn-on annotations
     """
     # Define list of images
     img_list = [os.path.join(root, file) for root, _, files in os.walk(im_path) for file in files]
@@ -146,28 +145,27 @@ def make_images_from_file(filename, first_reads, im_path=None, save_dir=None):
         cv2.imwrite(os.path.join(save_to, patient_id + '.jpg'), img)
 
 
-def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=False, model=False,
-                      model_conf=None, bootstrap_iters=0, save_name=''):
+def calculate_metrics(first_reads: pd.DataFrame,
+                      second_reads: pd.DataFrame,
+                      iou_threshold: Union[float, Iterable[float]] = None,
+                      verbose: bool = False,
+                      model: bool = False,
+                      model_conf: Optional[float] = None,
+                      bootstrap_iters: int = 0,
+                      save_name: Optional[str] = None) -> None:
     """
     Calculates various performance metrics across the two reads.
 
     Parameters
     ----------
-    first_reads : DataFrame
-        contains image and bounding box locations from the first radiologist reads
-    second_reads : DataFrame
-        contains image and bounding box locations from the second radiologist reads
-    iou_threshold : float or array
-        threshold at which to consider bounding box overlap as a true positive. If array,
-        it will loop through all thresholds and save performance to CSV
-    verbose : bool
-        whether to print out metrics to console
-    model : bool
-        whether model predictions are being used as one of the reads (use read2)
-    model_conf : float
-        threshold to keep bounding box predictions from the model
-    save_name : str
-        name to save the file as
+    first_reads   : DataFrame with image and bounding box locations from the first radiologist reads
+    second_reads  : DataFrame with image and bounding box locations from the second radiologist reads
+    iou_threshold : if float, threshold to consider bounding box overlap as a true positive.
+                    if array, will loop through all thresholds and save performance to CSV
+    verbose       : whether to print out metrics to console
+    model         : whether model predictions are being used as one of the reads (use read2)
+    model_conf    : threshold to keep bounding box predictions from the model
+    save_name     : name to save the file as
     """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
@@ -264,11 +262,11 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
                                         calc_df['True Negatives'].sum())
 
         mAP = calc_mAP(preds=second_reads, annots=first_reads, iou_threshold=iou_threshold)
-        curr_auc = compute_afroc(first_reads, second_reads, no_save=True)
+        curr_auc = compute_afroc(first_reads, second_reads, iou_threshold, no_save=True)
 
+    # Print out performance stats and metrics
     if verbose:
         frac_pres_df = calc_df[calc_df['True Negatives'] == 0]
-        # Print out misc. confusion matrix stats
         print('')
         print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 1', 'Read 2'))
         print('|{}|'.format('-'*46))
@@ -294,7 +292,7 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
         print('|{:^24}|{:^21}|'.format('False Positives', metric_calc.false_pos))
         print('|{:^24}|{:^21}|'.format('False Negatives', metric_calc.false_neg))
         print('|{:^24}|{:^21}|'.format('True Negatives', metric_calc.true_neg))
-        print('|{:^24}|{:^21.5}|'.format(f'mAP@{round(parser_args.iou_thresh, 1)}', mAP))
+        print('|{:^24}|{:^21.5}|'.format(f'mAP@{parser_args.iou_thresh:.1f}', mAP))
         print('|{:^24}|{:^21.5}|'.format('Accuracy', metric_calc.accuracy()))
         print('|{:^24}|{:^21.5}|'.format('Precision', metric_calc.precision()))
         print('|{:^24}|{:^21.5}|'.format('Recall/TPR/Sens', metric_calc.recall()))
@@ -342,19 +340,22 @@ def calculate_metrics(first_reads, second_reads, iou_threshold=None, verbose=Fal
             print(f'\tMean +/- std for F2 Score: {np.mean(boot_f2s):.5f} +/- {np.std(boot_f2s):.5f} | Coeff. of Variation: {np.std(boot_f2s)/np.mean(boot_f2s):.5f}')
 
 
-def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
+def test_calc_perf(first_reads: pd.DataFrame,
+                   second_reads: pd.DataFrame,
+                   iou_threshold: Optional[float] = None,
+                   model: bool = False,
+                   model_conf: Optional[float] = None) -> None:
     """
-    Loop through all possible model confidence value and calculate the performance of the model with
-    and without an avalanche decision scheme.
+    Print out a CSV with ground truth vs model prediction bbox performance from the old and new
+    versions of calc_performance.
 
     Parameters
     ----------
-    first_reads : DataFrame
-        contains image and bounding box locations from the first radiologist reads
-    second_reads : DataFrame
-        contains image and bounding box locations from the second radiologist reads
-    iou_threshold : float
-        threshold at which to consider bounding box overlap as a true positive
+    first_reads   : image and bounding box locations from the first radiologist reads
+    second_reads  : image and bounding box locations from the second radiologist reads
+    iou_threshold : threshold at which to consider bounding box overlap as a true positive
+    model         : whether model predictions are being used as one of the reads (use read2)
+    model_conf    : threshold to keep bounding box predictions from the model
     """
     # Pull out unique PatientID.png from ID column of both reads
     read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
@@ -364,19 +365,84 @@ def avalanche_scheme(first_reads, second_reads, iou_threshold=None):
     match_annos = np.intersect1d(read1_names, read2_names)
     print(f'{len(match_annos)} MATCHING IDs -- TEST SET SIZE {len(read1_names)}')
 
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="")
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="conservative")
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="posterior")
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.05)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.10)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.15)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.20)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.25)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.30)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.35)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.40)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.45)
-    avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=0.50)
+    orig_tps = []
+    orig_fps = []
+    orig_fns = []
+    orig_tns = []
+    orig_overlaps = []
+    orig_ious = []
+
+    new_tps = []
+    new_fps = []
+    new_fns = []
+    new_tns = []
+    new_overlaps = []
+    new_ious = []
+
+    for _, patient in tqdm(enumerate(match_annos), desc='Calculating Metrics', total=len(match_annos)):
+        # Get first- and second-read bounding boxes for patient
+        read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
+        if not model:
+            read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
+        else:
+            read2_bboxes, _ = get_bounding_boxes(patient, anno_df=second_reads, has_probs=True, conf_threshold=model_conf)
+
+        # Calculate performance between bounding boxes
+        true_pos, false_pos, false_neg, true_neg, ious, overlaps = calc_performance_OLD(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
+
+        # Add percent overlaps to all_overlaps
+        orig_tps.append(true_pos)
+        orig_fps.append(false_pos)
+        orig_fns.append(false_neg)
+        orig_tns.append(true_neg)
+        orig_ious.append(ious)
+        orig_overlaps.append(overlaps)
+
+        true_pos, false_pos, false_neg, true_neg, ious, overlaps = calc_performance(read2_bboxes, read1_bboxes, iou_threshold=iou_threshold)
+
+        # Add percent overlaps to all_overlaps
+        new_tps.append(true_pos)
+        new_fps.append(false_pos)
+        new_fns.append(false_neg)
+        new_tns.append(true_neg)
+        new_ious.append(ious)
+        new_overlaps.append(overlaps)
+
+    with open('test_calc_performances.csv', 'w') as out_file:
+        for patient, orig_tp, orig_fp, orig_fn, orig_tn, new_tp, new_fp, new_fn, new_tn, in zip(
+                match_annos, orig_tps, orig_fps, orig_fns, orig_tns, new_tps, new_fps, new_fns, new_tns
+        ):
+            out_str = ','.join([patient, 'ORIG', str(orig_tp), str(orig_fp), str(orig_fn), str(orig_tn), 'NEW', str(new_tp), str(new_fp), str(new_fn), str(new_tn)]) + '\n'
+            out_file.write(out_str)
+
+
+def avalanche_scheme(first_reads: pd.DataFrame, second_reads: pd.DataFrame, iou_threshold: float = None) -> None:
+    """
+    Loop through all possible model confidence value and calculate the performance of the model with
+    and without an avalanche decision scheme.
+
+    Parameters
+    ----------
+    first_reads   : DataFrame with image and bounding box locations from the first radiologist reads
+    second_reads  : DataFrame with image and bounding box locations from the second radiologist reads
+    iou_threshold : threshold at which to consider bounding box overlap as a true positive
+    """
+    # Pull out unique PatientID.png from ID column of both reads
+    read1_names = np.unique([name.split('/')[-1].upper() for name in first_reads.ID])
+    read2_names = np.unique([name.split('/')[-1].upper() for name in second_reads.ID])
+
+    # Find matching PatientIDs
+    match_annos = np.intersect1d(read1_names, read2_names)
+    print(f'{len(match_annos)} MATCHING IDs -- TEST SET SIZE {len(read1_names)}')
+
+    methods = ["", "conservative", "posterior"]
+    rates = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+
+    for method in methods:
+        avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method=method)
+
+    for rate in rates:
+        avalanche_calc(first_reads, second_reads, match_annos, iou_threshold, method="avalanche", rate=rate)
 
 
 def avalanche_calc(first_reads, second_reads, match_annos, iou_threshold=None, method="", rate=0.05):
@@ -568,20 +634,19 @@ def create_bbox_dataframe(first_reads, second_reads, iou_threshold, save_name=''
     bbox_df.to_csv(save_name, index=False)
 
 
-def compute_afroc(ground_truths, model_predictions, save_name='', no_save=False):
+def compute_afroc_OLD(ground_truths: pd.DataFrame,
+                    model_predictions: pd.DataFrame,
+                    save_name: str = '',
+                    no_save: bool = False) -> None:
     """
     Calculates LLF and FPR for each threshold to plot an AFROC curve of the model performance
 
     Parameters
     ----------
-    ground_truths : DataFrame
-        contains image and bounding box locations from radiologist reads
-    model_predictions : DataFrame
-        contains image and bounding box locations with probabilities from the neural network
-    save_name : str
-        name to save the file as
-    no_save : bool
-        determines whether to save the afroc values to a file or just output AUC
+    ground_truths     : contains image and bounding box locations from radiologist reads
+    model_predictions : contains image and bounding box locations with probabilities from the neural network
+    save_name         : name to save the file as
+    no_save           : determines whether to save the afroc values to a file or just output AUC
     """
     # Sort all the probabilities from the model
     sorted_scores = model_predictions.Prob.sort_values().values
@@ -636,7 +701,7 @@ def compute_afroc(ground_truths, model_predictions, save_name='', no_save=False)
 
     if no_save:
         return auc(fpr_list, llf_list)
-    
+
     # Output values to a file
     print('Writing to file...')
     with open(save_name, 'w') as out_file:
@@ -645,6 +710,89 @@ def compute_afroc(ground_truths, model_predictions, save_name='', no_save=False)
 
     # Print area under AFROC curve
     print(f'Area under AFROC: {auc(fpr_list, llf_list):.5f}')
+
+
+def compute_afroc(ground_truths: pd.DataFrame,
+                  model_predictions: pd.DataFrame,
+                  iou_threshold: float,
+                  save_name: str = '',
+                  no_save: bool = False) -> None:
+    """
+    Calculates LLF and FPR for each threshold to plot an AFROC curve of the model performance
+
+    Parameters
+    ----------
+    ground_truths     : contains image and bounding box locations from radiologist reads
+    model_predictions : contains image and bounding box locations with probabilities from the neural network
+    save_name         : name to save the file as
+    no_save           : determines whether to save the afroc values to a file or just output AUC
+    """
+    model_predictions = model_predictions.sort_values(by=['ID', 'Prob'], ascending=[True, False], ignore_index=True) # Sort by ID to be consistent with match_annos later
+
+    sorted_scores = model_predictions.Prob.sort_values().values
+    sorted_scores = sorted_scores[~np.isnan(sorted_scores)] # Get rid of nan values
+
+    # Pull out unique PatientID.png from ID column of both reads
+    gt_names = np.unique([name[name.rfind('/')+1:] for name in ground_truths.ID])
+    pred_names = np.unique([name[name.rfind('/')+1:] for name in model_predictions.ID])
+
+    # Find matching PatientIDs
+    match_annos = np.intersect1d(gt_names, pred_names)
+
+    iou_array = np.array([])
+    for patient in match_annos:
+        truth_boxes = get_bounding_boxes(patient, anno_df=ground_truths)
+        pred_boxes, _ = get_bounding_boxes(patient, anno_df=model_predictions, has_probs=True)
+
+        num_preds = len(pred_boxes) if pred_boxes else 1
+        num_truths = len(truth_boxes) if truth_boxes else 1
+        temp_iou_array = np.zeros((num_preds, num_truths))
+        for i, pred in enumerate(pred_boxes):
+            for k, truth in enumerate(truth_boxes):
+                if pred and truth: # Continue only if both pred and truth have boxes
+                    temp_iou, _ = intersection_over_union(pred, truth)
+                    if temp_iou >= iou_threshold:
+                        temp_iou_array[i, k] = temp_iou
+
+        iou_array = block_diag(iou_array, temp_iou_array)
+    iou_array = np.delete(iou_array, 0, axis=0) # delete first row -- always empty
+
+    assert len(iou_array) == len(model_predictions)
+
+    # Instantiate lists and variables
+    llf_list = []
+    fpr_list = []
+    total_fractures = len(ground_truths)
+    total_images = len(set(ground_truths.ID))
+
+    # Loop through sorted_scores and calculate LLF and FPR for each score
+    for _, threshold in tqdm(enumerate(sorted_scores), desc='Calculating AUC', total=sorted_scores.size):
+
+        thresholded_iou_array = iou_array[model_predictions.Prob >= threshold]
+        
+        true_pos = np.where(thresholded_iou_array.any(axis=0))[0].size
+        false_pos = np.where(~thresholded_iou_array.any(axis=1))[0].size
+
+        # Calculate LLF, NLF, and FPR for current threshold
+        curr_llf = min(1., true_pos / total_fractures)
+        curr_nlf = false_pos / total_images
+        est_fpr = 1 - np.exp(-curr_nlf)
+
+        # Add LLF and FPR values to lists
+        llf_list.append(curr_llf)
+        fpr_list.append(est_fpr)
+
+    if no_save:
+        return auc(fpr_list, llf_list)
+
+    # Print area under AFROC curve
+    print(f'Area under AFROC: {auc(fpr_list, llf_list):.5f}')
+
+    # Output values to a file
+    print('Writing to file...')
+    with open(save_name, 'w') as out_file:
+        for threshold, llf, fpr in zip(sorted_scores, llf_list, fpr_list):
+            out_file.write('{},{},{}\n'.format(threshold, llf, fpr))
 
 
 def main(parse_args):
@@ -684,6 +832,10 @@ def main(parse_args):
         calculate_metrics(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
                           verbose=True, model=parse_args.model, model_conf=parse_args.model_conf, bootstrap_iters=parse_args.bootstrap_iters)
 
+    if parse_args.metrics2:
+        test_calc_perf(first_reads, second_reads, iou_threshold=parse_args.iou_thresh,
+                          verbose=True, model=parse_args.model, model_conf=parse_args.model_conf, bootstrap_iters=parse_args.bootstrap_iters)
+
     if parse_args.avalanche:
         avalanche_scheme(first_reads, second_reads, iou_threshold=parse_args.iou_thresh)
 
@@ -718,6 +870,9 @@ if __name__ == "__main__":
                         help='Create images with drawn-on annotations from both reads; boxes colored based on TP/FP/FN.')
 
     parser.add_argument('--metrics', action='store_true',
+                        help='Calculate various performance metrics and print them out to console.')
+
+    parser.add_argument('--metrics2', action='store_true',
                         help='Calculate various performance metrics and print them out to console.')
 
     parser.add_argument('--avalanche', action='store_true',
@@ -768,14 +923,14 @@ if __name__ == "__main__":
 
     parser_args = parser.parse_args()
 
-    if not any([parser_args.images, parser_args.color_images, parser_args.metrics, parser_args.avalanche, parser_args.bboxes, parser_args.plot, parser_args.afroc]):
+    if not any([parser_args.images, parser_args.color_images, parser_args.metrics, parser_args.metrics2, parser_args.avalanche, parser_args.bboxes, parser_args.plot, parser_args.afroc]):
         parser.error('Please choose one of --images, --color_images, --metrics, --avalanche, --bboxes, --plot, or --afroc.')
 
     if parser_args.afroc and not parser_args.model:
         parser.error('Use --model flag when using --afroc.')
 
     # Print out start of execution
-    print('Starting execution...')
+    print('\nStarting execution...')
     start_time = time.perf_counter()
 
     # Run main function
@@ -784,4 +939,4 @@ if __name__ == "__main__":
     # Print out time to complete
     print('Done!')
     end_time = time.perf_counter()
-    print(f'Execution finished in {end_time - start_time:.3f} seconds.')
+    print(f'Execution finished in {end_time - start_time:.3f} seconds.\n')
