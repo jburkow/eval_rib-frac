@@ -39,11 +39,11 @@ class MetricsConfMatrix:
         self.total_events = float(true_pos + false_pos + false_neg + true_neg)
 
     def accuracy(self):
-        """Calculate and return accuracy."""
+        """Calculate accuracy."""
         return (self.true_pos + self.true_neg) / self.total_events
 
     def precision(self):
-        """Calculate and return precision."""
+        """Calculate precision."""
         return 0 if float(self.true_pos + self.false_pos) == 0 else \
             self.true_pos / float(self.true_pos + self.false_pos)
 
@@ -63,12 +63,12 @@ class MetricsConfMatrix:
             (1 + 2**2)*(self.precision() * self.recall()) / (2**2*self.precision() + self.recall())
 
     def fpr(self):
-        """Calculate and return false positive rate."""
+        """Calculate false positive rate."""
         return 0 if float(self.false_pos + self.true_neg) == 0 else \
             self.false_pos / float(self.false_pos + self.true_neg)
 
     def cohens_kappa(self):
-        """Calculate and return Cohen's Kappa."""
+        """Calculate Cohen's Kappa."""
         # Calculate observed proportionate agreement
         obs_agree = (self.true_pos + self.true_neg) / self.total_events
         # Calculate probability of randomly marking
@@ -80,7 +80,7 @@ class MetricsConfMatrix:
         return (obs_agree - prop_e) / (1 - prop_e)
 
     def free_kappa(self):
-        """Calculate and return Free-Response Kappa (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/)."""
+        """Calculate Free-Response Kappa (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/)."""
         return 0 if float(self.false_pos + self.false_neg + 2 * self.true_pos) == 0 else \
             2 * self.true_pos / float(self.false_pos + self.false_neg + 2 * self.true_pos)
 
@@ -300,12 +300,10 @@ def calc_performance_OLD(predictions, truths, iou_threshold=0.50):
 
 def calc_performance(predictions: List[List[int]],
                      truths: List[List[int]],
-                     iou_threshold: float = 0.50
-                     ) -> Tuple[int, int, int, int, List[float], List[float]]:
+                     iou_threshold: float = 0.50) -> Tuple[int, int, int, int, List[float], List[float]]:
     """
-    Calculate how well the model performs at predicting the correct
-    bounding boxes. Performance is measured in terms of how many
-    true positives, false negatives, and false positives the model outputs.
+    Calculate how well model performs at predicting correct bounding boxes. Performance is measured
+    in terms of how many true positives, false negatives, and false positives the model outputs.
 
     Parameters
     ----------
