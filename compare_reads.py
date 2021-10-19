@@ -1,7 +1,7 @@
 '''
 Filename: compare_reads.py
 Author: Jonathan Burkow (burkowjo@msu.edu), Michigan State University
-Last Updated: 08/11/2021
+Last Updated: 10/18/2021
 Description: Goes through two separate radiologist read annotation files
     and either creates images with annotations drawn on, or calculates
     a Kappa metric across the dataset.
@@ -224,10 +224,11 @@ def calculate_metrics(first_reads: pd.DataFrame,
 
         all_overlaps = []
         all_ious = []
-
+        frac_abs_imgs = 0
         for _, patient in tqdm(enumerate(match_annos), desc='Calculating Metrics', total=len(match_annos)):
             # Get first- and second-read bounding boxes for patient
             read1_bboxes = get_bounding_boxes(patient, anno_df=first_reads)
+            frac_abs_imgs += 1 if len(read1_bboxes) == 0 else 0
             if not model:
                 read2_bboxes = get_bounding_boxes(patient, anno_df=second_reads)
             else:
@@ -271,8 +272,8 @@ def calculate_metrics(first_reads: pd.DataFrame,
         print('|{:^24}|{:^10}|{:^10}|'.format('METRIC', 'Read 1', 'Read 2'))
         print('|{}|'.format('-'*46))
         print('|{:^24}|{:^21}|'.format('Total Images', len(match_annos)))
-        print('|{:^24}|{:^21}|'.format('Fracture Present Images', len(calc_df[calc_df['True Negatives'] == 0])))
-        print('|{:^24}|{:^21}|'.format('Fracture Absent Images', len(calc_df[calc_df['True Negatives'] == 1])))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Fracture Present Images', len(match_annos) - frac_abs_imgs, len(calc_df[calc_df['True Negatives'] == 0])))
+        print('|{:^24}|{:^10}|{:^10}|'.format('Fracture Absent Images', frac_abs_imgs, len(calc_df[calc_df['True Negatives'] == 1])))
         print('|{:^24}|{:^10}|{:^10}|'.format('Total Ribs Labeled', frac_pres_df['BBoxes Read 1'].sum(), frac_pres_df['BBoxes Read 2'].sum()))
         print('|{:^24}|{:^10.5}|{:^10.5}|'.format('Avg. Ribs/Image', frac_pres_df['BBoxes Read 1'].mean(), frac_pres_df['BBoxes Read 2'].mean()))
         print('|{:^24}|{:^10.5}|{:^10.5}|'.format('StdDev. Ribs/Image', frac_pres_df['BBoxes Read 1'].std(), frac_pres_df['BBoxes Read 2'].std()))
