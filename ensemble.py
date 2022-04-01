@@ -1,8 +1,8 @@
 '''
 Filename: ensemble.py
-Author(s): Gregory Holste, giholste@gmail.com, UT Austin
-           Jonathan Burkow, burkowjo@msu.edu, Michigan State University
-Last Updated: 02/20/2022
+Author(s): Jonathan Burkow, burkowjo@msu.edu, Michigan State University
+           Gregory Holste, giholste@gmail.com, UT Austin
+Last Updated: 03/21/2022
 Description: Takes in a list of model prediction CSVs and creates a new ensemble CSV using Non-
     Maximum Suppression and outputs as a single new prediction CSV.
 '''
@@ -10,23 +10,102 @@ Description: Takes in a list of model prediction CSVs and creates a new ensemble
 import argparse
 import os
 import time
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 from torchvision.ops import nms
 
+from general_utils import convert_seconds
 
-def make_ensemble(model_pred_list: str, images_path: str, df_names: List[str] = None) -> pd.DataFrame:
+
+def non_max_suppression(
+        data_df: pd.DataFrame,
+        df_names: List[str] = None,
+        iou_thresh=0.55
+    ) -> Tuple[List[int], List[int], List[int], List[int], List[float], List[bool]]:
+    """
+    Applies non-maximum suppression (NMS) to the provided data_df and outputs all remaining bounding
+    boxes and the kept indices.
+
+    Parameters
+    ----------
+    data_df    : DataFrame of current patient's bounding box predictions
+    df_names   : column headers for the DataFrame
+    iou_thresh : IOU threshold for discarded boxes during non-max suppression
+
+    Returns
+    -------
+    x1_list    : list of all top left x-values of NMS-accepted bounding boxes
+    y1_list    : list of all top left y-values of NMS-accepted bounding boxes
+    x2_list    : list of all bottom left x-values of NMS-accepted bounding boxes
+    y2_list    : list of all bottom left y-values of NMS-accepted bounding boxes
+    score_list : list of all corresponding scores of bounding boxes
+    keep       : boolean list of accepted bounding boxes from NMS
+    """
+    # Convert to float tensors for PyTorch NMS usage
+    boxes = torch.from_numpy(data_df[['x1', 'y1', 'x2', 'y2']].values.astype(np.float64))
+    scores = torch.from_numpy(data_df[df_names[-1]].values.astype(np.float64))
+
+    # Run NMS and collect results
+    keep = nms(boxes, scores, iou_threshold=iou_thresh)
+
+    x1_list = boxes[keep, 0].int().tolist()
+    y1_list = boxes[keep, 1].int().tolist()
+    x2_list = boxes[keep, 2].int().tolist()
+    y2_list = boxes[keep, 3].int().tolist()
+    score_list = scores[keep].tolist()
+
+    return x1_list, y1_list, x2_list, y2_list, score_list, keep
+
+
+def apply_nms(
+        data_df: pd.DataFrame,
+        df_names: List[str] = None,
+        iou_thresh: float = 0.55
+    ) -> pd.DataFrame:
+    # For each image: (1) gather all detections across ensemble members + (2) perform NMS on that set of detections
+    img_paths = []
+    x1_list, y1_list, x2_list, y2_list = [], [], [], []
+    all_scores = []
+    for img_path in list(set(data_df[df_names[0]])):
+        # Subset data frame for all detections on image
+        df = data_df[data_df[df_names[0]] == img_path]
+
+        # Remove NAs... if nothing remains (no detections from any model), continue
+        df = df.dropna(subset=df_names[1:])
+
+        if df.shape[0] == 0:
+            continue
+
+        patient_x1s, patient_y1s, patient_x2s, patient_y2s, score_list, keep = non_max_suppression(df, df_names, iou_thresh)
+
+        img_paths.extend([img_path]*keep.shape[0])
+        x1_list.extend(patient_x1s)
+        y1_list.extend(patient_y1s)
+        x2_list.extend(patient_x2s)
+        y2_list.extend(patient_y2s)
+        all_scores.extend(score_list)
+
+    return pd.DataFrame({df_names[0]: img_paths, 'x1': x1_list, 'y1': y1_list, 'x2': x2_list, 'y2': y2_list, df_names[-1]: all_scores})
+
+
+def make_ensemble(
+        model_pred_list: str,
+        images_path: str,
+        df_names: List[str] = None,
+        nms_iou_thresh: float = 0.55
+    ) -> pd.DataFrame:
     """
     Combine multiple prediction CSVs into a single ensemble DataFrame.
 
     Parameters
     ----------
-    model_pred_list  : list of all model prediction CSVs
-    images_path      : path to directory of images to add back in at the end
-    df_names         : column headers for the DataFrame
+    model_pred_list : list of all model prediction CSVs
+    images_path     : path to directory of images to add back in at the end
+    df_names        : column headers for the DataFrame
+    nms_iou_thresh  : iou threshold for removing overlapping boxes during NMS
 
     Returns
     -------
@@ -47,51 +126,24 @@ def make_ensemble(model_pred_list: str, images_path: str, df_names: List[str] = 
     # member doesn't cause duplicate boxes later.
     pred_df[df_names[0]] = pred_df.apply(lambda x: x[df_names[0]].split('/')[-1], axis=1)
 
-    # For each image: (1) gather all detections across ensemble members + (2) perform NMS on that set of detections
-    ens_img_paths = []
-    ens_x1s, ens_y1s, ens_x2s, ens_y2s = [], [], [], []
-    ens_scores = []
-    for img_path in list(set(pred_df[df_names[0]])):
-        # Subset data frame for all detections on image
-        df = pred_df[pred_df[df_names[0]] == img_path]
+    # Apply Non-Max Suppression to the data
+    ens_df = apply_nms(pred_df, df_names, iou_thresh=nms_iou_thresh)
 
-        # Remove NAs... if nothing remains (no detections from any model), continue
-        df = df.dropna(subset=df_names[1:])
-
-        if df.shape[0] == 0:
-            continue
-
-        # Convert to float tensors for PyTorch NMS usage
-        boxes = torch.from_numpy(df[['x1', 'y1', 'x2', 'y2']].values.astype(np.float64))
-        scores = torch.from_numpy(df[df_names[-1]].values.astype(np.float64))
-
-        # Run NMS and collect results
-        keep = nms(boxes, scores, iou_threshold=0.55)
-
-        ens_img_paths.extend([img_path]*keep.shape[0])
-        ens_x1s.extend(boxes[keep, 0].int().tolist())
-        ens_y1s.extend(boxes[keep, 1].int().tolist())
-        ens_x2s.extend(boxes[keep, 2].int().tolist())
-        ens_y2s.extend(boxes[keep, 3].int().tolist())
-        ens_scores.extend(scores[keep].tolist())
-
-    ens_df = pd.DataFrame({df_names[0]: ens_img_paths, 'x1': ens_x1s, 'y1': ens_y1s, 'x2': ens_x2s, 'y2': ens_y2s, df_names[-1]: ens_scores})
+    # Apply new image paths, then sort by paths/names (ascending) then by prob. score (descending)
     ens_df[df_names[0]] = ens_df.apply(lambda x: images_path + x[df_names[0]], axis=1)
-
-    # Sort by paths/names (ascending) then by probability score (descending)
     ens_df.sort_values(by=[df_names[0], df_names[-1]], inplace=True, ignore_index=True, ascending=[True, False])
 
     return ens_df
 
 
-def main(args):
+def main(args) -> None:
     """Main Function""" 
     ens_df = make_ensemble(args.preds, args.image_path)
     ens_df.to_csv(os.path.join(args.save_dir, f"{args.ensemble_name}.csv"), index=False, header=False)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Ensemble predictions from multiple detection models into a single csv file.')
+    parser = argparse.ArgumentParser()
 
     parser.add_argument('--preds', nargs='+', type=str, required=True,
                         help='Space-delimited list of prediction csv files.')
@@ -107,14 +159,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # Print out start of execution
-    print('Starting execution...')
+    print('\nStarting execution...')
     start_time = time.perf_counter()
-
-    # Run main function
     main(args)
-
-    # Print out time to complete
+    elapsed = time.perf_counter() - start_time
     print('Done!')
-    end_time = time.perf_counter()
-    print(f'Execution finished in {end_time - start_time:.3f} seconds.')
+    print(f'Execution finished in {elapsed:.3f} seconds ({convert_seconds(elapsed)}).\n')
