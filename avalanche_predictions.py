@@ -2,7 +2,7 @@
 Filename: avalanche_predictions.py
 Author: Jonathan Burkow, burkowjo@msu.edu
         Michigan State University
-Last Updated: 02/28/2022
+Last Updated: 03/21/2022
 Description: Takes a provided model predictions CSV file and applies an avalanche decision scheme
     to it. A new CSV file is created with the predictions that are kept after the scheme is applied.
 '''
@@ -13,6 +13,9 @@ import time
 
 import numpy as np
 import pandas as pd
+
+from ensemble import apply_nms
+from general_utils import convert_seconds
 
 
 def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate: float) -> pd.DataFrame:
@@ -28,23 +31,20 @@ def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate:
     rate       : if scheme='avalanche', uses rate for constant rate decrease between thresholds
     """
     # Define avalanche percent drops for different schemes
-    if scheme == "posterior":
-        # avalanche_percentages = [1, 1-0.7643979057591623, 1-0.8424657534246576, 1-0.7723577235772358, 1-0.7842105263157895]  # 20210420 data
-        avalanche_percentages = [1, 1-0.7364864864864865, 1-0.8134556574923547, 1-0.7669172932330827, 1-0.7696078431372549]  # 20210902 data
+    if scheme == "avalanche":
+        avalanche_percentages = [(1 - rate) for _ in range(10)]
+        avalanche_percentages.insert(0, 1)
     elif scheme == "conservative":
         # avalanche_percentages = [1, 0.7643979057591623, 0.8424657534246576, 0.7723577235772358, 0.7842105263157895]  # 20210420 data
         avalanche_percentages = [1, 0.7364864864864865, 0.8134556574923547, 0.7669172932330827, 0.7696078431372549]  # 20210902 data
-    elif scheme == "avalanche":
-        avalanche_percentages = [(1 - rate) for _ in range(10)]
-        avalanche_percentages.insert(0, 1)
+    elif scheme == "posterior":
+        # avalanche_percentages = [1, 1-0.7643979057591623, 1-0.8424657534246576, 1-0.7723577235772358, 1-0.7842105263157895]  # 20210420 data
+        avalanche_percentages = [1, 1-0.7364864864864865, 1-0.8134556574923547, 1-0.7669172932330827, 1-0.7696078431372549]  # 20210902 data
     else:
         avalanche_percentages = []
 
     # Create the test thresholds list to use when determining what model predictions are kept
-    if scheme == "standard":
-        thresholds = None
-    else:
-        thresholds = [base_value * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
+    thresholds = [base_value * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
 
     start_df = patient_df[patient_df['Prob'] >= thresholds[0]]
     num_model_boxes = len(start_df)
@@ -65,7 +65,7 @@ def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate:
     return start_df if thresh is None else step_df
 
 
-def get_avalanche_df(data_df: pd.DataFrame, scheme: str, base_value: float, rate: float) -> pd.DataFrame:
+def get_avalanche_df(data_df: pd.DataFrame, scheme: str, base_value: float, rate: float, add_nms: bool = False) -> pd.DataFrame:
     """
     Apply an avalanche scheme to the model predictions DataFrame and output the final DataFrame of
     model predictions.
@@ -88,16 +88,11 @@ def get_avalanche_df(data_df: pd.DataFrame, scheme: str, base_value: float, rate
             scheme_df = apply_scheme(df_group, scheme, base_value, rate)
 
         if len(scheme_df) == 0:
-            out_df = out_df.append({'ID'   : group_name,
-                                    'x1'   : "",
-                                    'y1'   : "",
-                                    'x2'   : "",
-                                    'y2'   : "",
-                                    'Prob' : ""}, ignore_index=True)
+            out_df = out_df.append({'ID' : group_name, 'x1' : pd.NA, 'y1' : pd.NA, 'x2' : pd.NA, 'y2' : pd.NA, 'Prob' : pd.NA}, ignore_index=True)
         else:
             out_df = out_df.append(scheme_df, ignore_index=True)
 
-    return out_df
+    return out_df if not add_nms or scheme == "standard" else apply_nms(out_df, ['ID', 'x1', 'y1', 'x2', 'y2', 'Prob'], 0.45)
 
 
 def main(pargs):
@@ -137,16 +132,11 @@ if __name__ == "__main__":
     parser.add_argument('--no_save', action='store_true',
                         help='If true, does not save resulting DataFrame to a CSV.')
 
-    parser_args = parser.parse_args()
+    args = parser.parse_args()
 
-    # Print out start of execution
-    print('Starting execution...')
+    print('\nStarting execution...')
     start_time = time.perf_counter()
-
-    # Run main function
-    main(parser_args)
-
-    # Print out time to complete
+    main(args)
+    elapsed = time.perf_counter() - start_time
     print('Done!')
-    end_time = time.perf_counter()
-    print(f'Execution finished in {end_time - start_time:.3f} seconds.')
+    print(f'Execution finished in {elapsed:.3f} seconds ({convert_seconds(elapsed)}).\n')
