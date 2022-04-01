@@ -1,13 +1,13 @@
 '''
 Filename: eval_utils.py
-Author: Jonathan Burkow, burkowjo@msu.edu
-        Michigan State University
-Last Updated: 08/10/2021
-Description: Various utility functions used for evaluating performance
-    of the model on detection.
+Author(s): Jonathan Burkow, burkowjo@msu.edu, Michigan State University
+Last Updated: 03/31/2022
+Description: Various utility functions used for evaluating performance of the model on detection.
 '''
 
-from typing import List, Tuple, Optional
+import itertools
+from typing import List, Optional, Tuple
+
 import cv2
 import numpy as np
 import pandas as pd
@@ -22,7 +22,7 @@ class MetricsConfMatrix:
     -----
     Wikipedia page for metric names and formulas: https://en.wikipedia.org/wiki/Confusion_matrix
     """
-    def __init__(self, true_pos: int, false_pos: int, false_neg: int, true_neg: int):
+    def __init__(self, true_pos: int, false_pos: int, false_neg: int, true_neg: int) -> None:
         """
         Parameters
         ----------
@@ -38,36 +38,36 @@ class MetricsConfMatrix:
 
         self.total_events = float(true_pos + false_pos + false_neg + true_neg)
 
-    def accuracy(self):
+    def accuracy(self) -> float:
         """Calculate accuracy."""
         return (self.true_pos + self.true_neg) / self.total_events
 
-    def precision(self):
+    def precision(self) -> float:
         """Calculate precision."""
         return 0 if float(self.true_pos + self.false_pos) == 0 else \
             self.true_pos / float(self.true_pos + self.false_pos)
 
-    def recall(self):
+    def recall(self) -> float:
         """Calculate recall."""
         return 0 if float(self.true_pos + self.false_neg) == 0 else \
             self.true_pos / float(self.true_pos + self.false_neg)
 
-    def f1_score(self):
+    def f1_score(self) -> float:
         """Calculate F1 score."""
         return 0 if (self.precision() + self.recall()) == 0 else \
             2 * (self.precision() * self.recall()) / (self.precision() + self.recall())
 
-    def f2_score(self):
+    def f2_score(self) -> float:
         """Calculate F2 score."""
         return 0 if (2**2 * self.precision() + self.recall()) == 0 else \
             (1 + 2**2)*(self.precision() * self.recall()) / (2**2*self.precision() + self.recall())
 
-    def fpr(self):
+    def fpr(self) -> float:
         """Calculate false positive rate."""
         return 0 if float(self.false_pos + self.true_neg) == 0 else \
             self.false_pos / float(self.false_pos + self.true_neg)
 
-    def cohens_kappa(self):
+    def cohens_kappa(self) -> float:
         """Calculate Cohen's Kappa."""
         # Calculate observed proportionate agreement
         obs_agree = (self.true_pos + self.true_neg) / self.total_events
@@ -79,13 +79,17 @@ class MetricsConfMatrix:
         prop_e = prop_yes + prop_no
         return (obs_agree - prop_e) / (1 - prop_e)
 
-    def free_kappa(self):
+    def free_kappa(self) -> float:
         """Calculate Free-Response Kappa (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5395923/)."""
         return 0 if float(self.false_pos + self.false_neg + 2 * self.true_pos) == 0 else \
             2 * self.true_pos / float(self.false_pos + self.false_neg + 2 * self.true_pos)
 
 
-def pytorch_resize(image, min_side: int = 608, max_side: int = 1024):
+def pytorch_resize(
+        image: np.ndarray,
+        min_side: int = 608,
+        max_side: int = 1024
+    ) -> Tuple[np.ndarray, float]:
     """
     Resizes and outputs the image and scale.
     Adopted from https://github.com/yhenon/pytorch-retinanet.
@@ -122,11 +126,13 @@ def pytorch_resize(image, min_side: int = 608, max_side: int = 1024):
     return image, scale
 
 
-def get_bounding_boxes(patient_nm: str,
-                       anno_df: Optional[pd.DataFrame] = None,
-                       info_loc: Optional[str] = None,
-                       has_probs: bool = False,
-                       conf_threshold: float = 0.00) -> Tuple[List[List[int]], List[List[float]]]:
+def get_bounding_boxes(
+        patient_nm: str,
+        anno_df: Optional[pd.DataFrame] = None,
+        info_loc: Optional[str] = None,
+        has_probs: bool = False,
+        conf_threshold: float = 0.00
+    ) -> Tuple[List[List[int]], List[List[float]]]:
     """
     Extracts the bounding box locations of the specific patient from the annotations file.
 
@@ -176,13 +182,15 @@ def get_bounding_boxes(patient_nm: str,
         return boxes, probs
 
     # If no probabilities, just return boxes
-    for _, row in subset_df.iterrows():
-        boxes.append((int(row['x1']), int(row['y1']), int(row['x2']), int(row['y2'])))
+    boxes.extend((int(row['x1']), int(row['y1']), int(row['x2']), int(row['y2'])) for _, row in subset_df.iterrows())
 
     return boxes
 
 
-def intersection_over_union(predict_box: List[int], truth_box: List[int]) -> Tuple[float, float]:
+def intersection_over_union(
+        predict_box: List[int],
+        truth_box: List[int]
+    ) -> Tuple[float, float]:
     """
     Computes the intersection-over-union of two bounding boxes.
 
@@ -218,89 +226,11 @@ def intersection_over_union(predict_box: List[int], truth_box: List[int]) -> Tup
     return iou, overlap
 
 
-def calc_performance_OLD(predictions, truths, iou_threshold=0.50):
-    """
-    Calculate how well the model performs at predicting the correct
-    bounding boxes. Performance is measured in terms of how many
-    true positives, false negatives, and false positives the model outputs.
-
-    Parameters
-    ----------
-    predictions : list
-        list of lists of bounding boxes predicted by the model
-    truths : list
-        list of lists of ground truth bounding boxes
-    iou_threshold : float
-        IOU value to be considered true positive
-
-    Returns
-    -------
-    true_pos : int
-        number of true positives
-    false_pos : int
-        number of false positives
-    false_neg : int
-        number of false negatives
-    ious : list
-        list of intersection-over-union values for each box pair
-    overlaps : list
-        list of overlap values for each box pair
-    """
-    # Initialize output values
-    true_pos = 0
-    false_pos = 0
-    false_neg = 0
-    true_neg = 0
-    ious = []
-    overlaps = []
-
-    # If neither ground truth or model has fractures, return a true negative
-    if len(predictions) == 0 and len(truths) == 0:
-        true_neg = 1
-        return true_pos, false_pos, false_neg, true_neg, ious, overlaps
-
-    # No model predictions but ground truths, return all as false negatives
-    if len(predictions) == 0 and len(truths) > 0:
-        false_neg = len(truths)
-        return true_pos, false_pos, false_neg, true_neg, ious, overlaps
-
-    # No ground truths but model has fractures, return all as false positives
-    if len(truths) == 0 and len(predictions) > 0:
-        false_pos = len(predictions)
-        return true_pos, false_pos, false_neg, true_neg, ious, overlaps
-
-    # Calculate true positive, false positive, and false negatives if
-    # both model predicted fractures and ground truth has labels
-    for box in predictions:
-        iou = 0
-        overlap = 0
-        for truth in truths:
-            temp_iou, temp_overlap = intersection_over_union(box, truth)
-            if temp_iou > iou_threshold:
-                iou = max(temp_iou, iou)
-                overlap = max(temp_overlap, overlap)
-        if iou == 0: # If no IoUs > iou_threshold, count as false positives
-            false_pos += 1
-        else:
-            ious.append(iou)
-            overlaps.append(overlap)
-            true_pos += 1
-    # Add to false negative count if truth box has no overlaps with predictions
-    for truth in truths:
-        iou = 0
-        for box in predictions:
-            temp_iou, _ = intersection_over_union(box, truth)
-            if temp_iou > iou_threshold:
-                iou = temp_iou
-        if iou == 0:
-            false_neg += 1
-
-    return true_pos, false_pos, false_neg, true_neg, ious, overlaps
-
-
-def calc_performance(predictions: List[List[int]],
-                     truths: List[List[int]],
-                     iou_threshold: float = 0.50) -> Tuple[int, int, int, int, List[float], List[float]]:
+def calc_conf_matrix(
+        predictions: List[List[int]],
+        truths: List[List[int]],
+        iou_threshold: float = 0.50
+    ) -> Tuple[int, int, int, int, List[float], List[float]]:
     """
     Calculate how well model performs at predicting correct bounding boxes. Performance is measured
     in terms of how many true positives, false negatives, and false positives the model outputs.
@@ -324,16 +254,15 @@ def calc_performance(predictions: List[List[int]],
     iou_array = np.zeros((len(predictions), len(truths)))
     overlap_array = np.zeros_like(iou_array)
 
-    for i, pred in enumerate(predictions):
-        for k, truth in enumerate(truths):
-            temp_iou, temp_overlap = intersection_over_union(pred, truth)
-            if temp_iou >= iou_threshold:
-                iou_array[i, k] = temp_iou
-                overlap_array[i, k] = temp_overlap
+    for (i, pred), (k, truth) in itertools.product(enumerate(predictions), enumerate(truths)):
+        temp_iou, temp_overlap = intersection_over_union(pred, truth)
+        if temp_iou >= iou_threshold:
+            iou_array[i, k] = temp_iou
+            overlap_array[i, k] = temp_overlap
 
-    true_pos = np.where(iou_array.any(axis=0))[0].size   # Counts columns containing nonzero values
-    false_pos = np.where(~iou_array.any(axis=1))[0].size # Counts rows containing only zeros
-    false_neg = np.where(~iou_array.any(axis=0))[0].size # Counts columns containing only zeros
+    true_pos = np.where(iou_array.any(axis=0))[0].size    # Counts columns containing nonzero values
+    false_pos = np.where(~iou_array.any(axis=1))[0].size  # Counts rows containing only zeros
+    false_neg = np.where(~iou_array.any(axis=0))[0].size  # Counts columns containing only zeros
     true_neg = 1 if iou_array.shape == (0, 0) else 0
 
     ious = []
@@ -350,21 +279,13 @@ def calc_performance(predictions: List[List[int]],
 
 def calc_bbox_area(box: List[int]) -> int:
     """
-    Calculates the pixel area of the bounding box.
+    Calculate and return the pixel area of the bounding box.
 
     Parameters
     ----------
     box : the annotated/predicted bounding box; [x1, y1, x2, y2]
-
-    Returns
-    -------
-    bbox_area : area of the bounding box
     """
-    # Calculate height and width of the bounding box
-    bbox_height = box[3] - box[1]
-    bbox_width = box[2] - box[0]
-
-    return bbox_height * bbox_width
+    return (box[3] - box[1]) * (box[2] - box[0])
 
 
 def calc_auc(afroc_df: pd.DataFrame) -> float:
@@ -392,18 +313,21 @@ def calc_auc(afroc_df: pd.DataFrame) -> float:
     return auc
 
 
-def calc_mAP(preds: pd.DataFrame, annots: pd.DataFrame, iou_threshold: float = 0.3) -> float:
+def calc_mAP(
+        preds: pd.DataFrame,
+        annots: pd.DataFrame,
+        iou_threshold: float = 0.3
+    ) -> float:
     """
     Evaluates detector predictions by mean average precision (mAP) at an IOU threshold.
     Adapted from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
 
     Parameters
     ----------
-    preds : DataFrame containing detector predicted boxes and scores
-        (output of `output_model_predictions.py`)
-    annots : DataFrame containing ground truth boxes
+    preds         : DataFrame with predicted boxes and scores (output of `output_model_predictions.py`)
+    annots        : DataFrame with ground truth boxes
     iou_threshold : Intersection over union (IOU) threshold used for mAP.
-        If a predicted box has IOU >= iou_threshold, then it is a true positive.
+                    If a predicted box has IOU >= iou_threshold, then it is a true positive.
 
     Returns
     -------
@@ -415,14 +339,14 @@ def calc_mAP(preds: pd.DataFrame, annots: pd.DataFrame, iou_threshold: float = 0
     # Gather annotations in desired format
     img_paths = list(set(annots['ID']))
 
-    all_annotations = [[None for i in range(1)] for j in range(len(img_paths))]
+    all_annotations = [[None for _ in range(1)] for _ in range(len(img_paths))]
     for i, img_path in enumerate(img_paths):
         sub_annots = annots[annots['ID'] == img_path]
 
         all_annotations[i][0] = sub_annots[['x1', 'y1', 'x2', 'y2', 'label']].values
 
     # Gather detections in desired format
-    all_detections = [[None for i in range(1)] for j in range(len(img_paths))]
+    all_detections = [[None for _ in range(1)] for _ in range(len(img_paths))]
     for i, img_path in enumerate(img_paths):
         sub_preds = preds[preds['ID'] == img_path]
 
@@ -490,7 +414,10 @@ def calc_mAP(preds: pd.DataFrame, annots: pd.DataFrame, iou_threshold: float = 0
     return None
 
 
-def compute_overlap(a: np.ndarray, b: np.ndarray) -> float:
+def compute_overlap(
+        a: np.ndarray,
+        b: np.ndarray
+    ) -> float:
     """
     Compute pairwise IOUs between two lists of boxes.
     Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
@@ -521,14 +448,17 @@ def compute_overlap(a: np.ndarray, b: np.ndarray) -> float:
 
     return intersection / ua
 
-def _compute_ap(recall: List[float], precision: List[float]) -> float:
+def _compute_ap(
+        recall: List[float],
+        precision: List[float]
+    ) -> float:
     """
     Compute average precision given recall and precision curves.
     Code from https://github.com/yhenon/pytorch-retinanet/blob/master/retinanet/csv_eval.py.
 
     Parameters
     ----------
-    recall : list of recall values at each threshold
+    recall    : list of recall values at each threshold
     precision : list of precision values at each threshold
 
     Returns
