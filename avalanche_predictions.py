@@ -17,8 +17,36 @@ import pandas as pd
 from ensemble import apply_nms
 from general_utils import convert_seconds
 
+AVALANCHE_CONFIGS = {
+    "standard" : {
+        "model_conf" : 0.50,
+        "base_val" : 0.50,
+        "rate" : 0.00
+    },
+    "posterior" : {
+        "model_conf" : 0.00,
+        "base_val" : 0.50,
+        "rate" : 0.00
+    },
+    "conservative" : {
+        "model_conf" : 0.00,
+        "base_val" : 0.45,
+        "rate" : 0.00
+    },
+    "gamma15" : {
+        "model_conf" : 0.00,
+        "base_val" : 0.40,
+        "rate" : 0.15
+    },
+    "gamma20" : {
+        "model_conf" : 0.00,
+        "base_val" : 0.60,
+        "rate" : 0.20
+    }
+}
 
-def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate: float) -> pd.DataFrame:
+
+def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate: float, df_cols: list[str] = None) -> pd.DataFrame:
     """
     Applies one of the avalanche schemes to the patient_df and outputs a DataFrame of all
     predictions accepted for the current patient.
@@ -30,6 +58,9 @@ def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate:
     base_value : the starting value, alpha_0, to apply across all threshold values
     rate       : if scheme='avalanche', uses rate for constant rate decrease between thresholds
     """
+    if df_cols is None:
+        df_cols = ['ID', 'x1', 'y1', 'x2', 'y2', 'Prob']
+
     # Define avalanche percent drops for different schemes
     if scheme == "avalanche":
         avalanche_percentages = [(1 - rate) for _ in range(10)]
@@ -46,7 +77,7 @@ def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate:
     # Create the test thresholds list to use when determining what model predictions are kept
     thresholds = [base_value * val for val in [np.prod(np.array(avalanche_percentages[:k])) for k in range(1, len(avalanche_percentages)+1)]]
 
-    start_df = patient_df[patient_df['Prob'] >= thresholds[0]]
+    start_df = patient_df[patient_df[df_cols[-1]] >= thresholds[0]]
     num_model_boxes = len(start_df)
 
     prior_num_model_boxes = 0
@@ -56,7 +87,7 @@ def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate:
         # Set threshold level based on number of already accepted fractures
         test_thresh_ind = min(len(thresholds)-1, num_model_boxes)
         thresh = thresholds[test_thresh_ind]
-        step_df = patient_df[patient_df['Prob'] >= thresh]
+        step_df = patient_df[patient_df[df_cols[-1]] >= thresh]
         num_model_boxes = len(step_df)
 
         if test_thresh_ind == len(thresholds):
@@ -65,7 +96,7 @@ def apply_scheme(patient_df: pd.DataFrame, scheme: str, base_value: float, rate:
     return start_df if thresh is None else step_df
 
 
-def get_avalanche_df(data_df: pd.DataFrame, scheme: str, base_value: float, rate: float, add_nms: bool = False) -> pd.DataFrame:
+def get_avalanche_df(data_df: pd.DataFrame, scheme: str, base_value: float, rate: float, add_nms: bool = False, df_cols: list[str] = None) -> pd.DataFrame:
     """
     Apply an avalanche scheme to the model predictions DataFrame and output the final DataFrame of
     model predictions.
@@ -79,28 +110,32 @@ def get_avalanche_df(data_df: pd.DataFrame, scheme: str, base_value: float, rate
     """
     out_df = pd.DataFrame(columns=data_df.columns)
 
-    grouped_df = data_df.groupby('ID')
+    if df_cols is None:
+        df_cols = ['ID', 'x1', 'y1', 'x2', 'y2', 'Prob']
+
+    grouped_df = data_df.groupby(df_cols[0])
 
     for group_name, df_group in grouped_df:
         if scheme == "standard":
-            scheme_df = df_group[df_group['Prob'] >= base_value]
+            scheme_df = df_group[df_group[df_cols[-1]] >= base_value]
         else:
-            scheme_df = apply_scheme(df_group, scheme, base_value, rate)
+            scheme_df = apply_scheme(df_group, scheme, base_value, rate, df_cols)
 
         if len(scheme_df) == 0:
-            out_df = out_df.append({'ID' : group_name, 'x1' : pd.NA, 'y1' : pd.NA, 'x2' : pd.NA, 'y2' : pd.NA, 'Prob' : pd.NA}, ignore_index=True)
+            out_df = out_df.append({df_cols[0] : group_name, df_cols[1] : pd.NA, df_cols[2] : pd.NA, df_cols[3] : pd.NA, df_cols[4] : pd.NA, df_cols[5] : pd.NA}, ignore_index=True)
         else:
             out_df = out_df.append(scheme_df, ignore_index=True)
 
-    return out_df if not add_nms or scheme == "standard" else apply_nms(out_df, ['ID', 'x1', 'y1', 'x2', 'y2', 'Prob'], 0.45)
+    return out_df if not add_nms or scheme == "standard" else apply_nms(out_df, df_cols, 0.45)
 
 
 def main(pargs):
     """Main Function"""
-    data_df = pd.read_csv(pargs.csv_preds, names=('ID', 'x1', 'y1', 'x2', 'y2', 'Prob'),
+    df_cols = ['ID', 'x1', 'y1', 'x2', 'y2', 'Prob']
+    data_df = pd.read_csv(pargs.csv_preds, names=df_cols,
                           dtype={'x1': pd.Int64Dtype(), 'y1': pd.Int64Dtype(), 'x2': pd.Int64Dtype(), 'y2': pd.Int64Dtype()})
 
-    out_df = get_avalanche_df(data_df, pargs.method, pargs.base_val, pargs.rate)
+    out_df = get_avalanche_df(data_df, pargs.method, pargs.base_val, pargs.rate, df_cols=df_cols)
 
     if not pargs.no_save:
         save_name = f'{pargs.filename}_{pargs.method}_base{pargs.base_val}'
