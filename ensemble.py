@@ -2,7 +2,7 @@
 Filename: ensemble.py
 Author(s): Jonathan Burkow, burkowjo@msu.edu, Michigan State University
            Gregory Holste, giholste@gmail.com, UT Austin
-Last Updated: 03/21/2022
+Last Updated: 04/29/2022
 Description: Takes in a list of model prediction CSVs and creates a new ensemble CSV using Non-
     Maximum Suppression and outputs as a single new prediction CSV.
 '''
@@ -17,6 +17,7 @@ import pandas as pd
 import torch
 from torchvision.ops import nms
 
+import avalanche_predictions
 from general_utils import convert_seconds
 
 
@@ -139,6 +140,10 @@ def make_ensemble(
 def main(args) -> None:
     """Main Function""" 
     ens_df = make_ensemble(args.preds, args.image_path)
+    if args.avalanche:
+        base_value = avalanche_predictions.AVALANCHE_CONFIGS[args.avalanche]['base_val']
+        rate = avalanche_predictions.AVALANCHE_CONFIGS[args.avalanche]['rate']
+        ens_df = avalanche_predictions.get_avalanche_df(ens_df, 'avalanche' if 'gamma' in args.avalanche else args.avalanche, base_value, rate, add_nms=True, df_cols=['img_path', 'x1', 'y1', 'x2', 'y2', 'score'])
     ens_df.to_csv(os.path.join(args.save_dir, f"{args.ensemble_name}.csv"), index=False, header=False)
 
 
@@ -156,6 +161,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--image_path', type=str, required=True,
                         help='Path location to images to add to all rows before exporting to CSV.')
+
+    parser.add_argument('--avalanche', type=str, choices=['standard', 'posterior', 'conservative', 'gamma15', 'gamma20'],
+                        help='Avalanche decision scheme to apply to the ensemble.')
 
     args = parser.parse_args()
 
