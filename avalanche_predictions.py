@@ -14,7 +14,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from ensemble import apply_nms
+from eval_utils import apply_nms
 from general_utils import convert_seconds
 
 AVALANCHE_CONFIGS = {
