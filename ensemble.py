@@ -2,7 +2,7 @@
 Filename: ensemble.py
 Author(s): Jonathan Burkow, burkowjo@msu.edu, Michigan State University
            Gregory Holste, giholste@gmail.com, UT Austin
-Last Updated: 04/29/2022
+Last Updated: 05/15/2024
 Description: Takes in a list of model prediction CSVs and creates a new ensemble CSV using Non-
     Maximum Suppression and outputs as a single new prediction CSV.
 '''
@@ -10,19 +10,30 @@ Description: Takes in a list of model prediction CSVs and creates a new ensemble
 import argparse
 import os
 import time
+from pathlib import Path
 
 import pandas as pd
 from avalanche_predictions import AVALANCHE_CONFIGS, get_avalanche_df
 from eval_utils import apply_nms
-from general_utils import convert_seconds
+
+
+def parse_cmd_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--preds', nargs='+', type=str, required=True, help='Space-delimited list of prediction csv files.')
+    parser.add_argument('--save_dir', type=str, required=True, help='Path to directory where ensembled csv will be saved.')
+    parser.add_argument('--ensemble_name', type=str, required=True, help='String describing the name of the final ensemble (dictates csv filename).')
+    parser.add_argument('--image_path', type=str, required=True, help='Path location to images to add to all rows before exporting to CSV.')
+    parser.add_argument('--avalanche', type=str, choices=['standard', 'posterior', 'conservative', 'gamma15', 'gamma20'], help='Avalanche decision scheme to apply to the ensemble.')
+
+    return parser.parse_args()
 
 
 def make_ensemble(
         model_pred_list: str,
         images_path: str,
         df_names: list[str] = None,
-        nms_iou_thresh: float = 0.55
-    ) -> pd.DataFrame:
+        nms_iou_thresh: float = 0.55) -> pd.DataFrame:
     """
     Combine multiple prediction CSVs into a single ensemble DataFrame.
 
@@ -62,8 +73,10 @@ def make_ensemble(
     return ens_df
 
 
-def main(args) -> None:
+def main() -> None:
     """Main Function"""
+    args = parse_cmd_args()
+
     ens_df = make_ensemble(args.preds, args.image_path)
     if args.avalanche:
         base_value = AVALANCHE_CONFIGS[args.avalanche]['base_val']
@@ -72,29 +85,10 @@ def main(args) -> None:
     ens_df.to_csv(os.path.join(args.save_dir, f"{args.ensemble_name}.csv"), index=False, header=False)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument('--preds', nargs='+', type=str, required=True,
-                        help='Space-delimited list of prediction csv files.')
-
-    parser.add_argument('--save_dir', type=str, required=True,
-                        help='Path to directory where ensembled csv will be saved.')
-
-    parser.add_argument('--ensemble_name', type=str, required=True,
-                        help='String describing the name of the final ensemble (dictates csv filename).')
-
-    parser.add_argument('--image_path', type=str, required=True,
-                        help='Path location to images to add to all rows before exporting to CSV.')
-
-    parser.add_argument('--avalanche', type=str, choices=['standard', 'posterior', 'conservative', 'gamma15', 'gamma20'],
-                        help='Avalanche decision scheme to apply to the ensemble.')
-
-    args = parser.parse_args()
-
-    print('\nStarting execution...')
+if __name__ == "__main__":
+    print(f"\n{'Starting execution: ' + Path(__file__).name:-^80}\n")
     start_time = time.perf_counter()
-    main(args)
+    main()
     elapsed = time.perf_counter() - start_time
-    print('Done!')
-    print(f'Execution finished in {elapsed:.3f} seconds ({convert_seconds(elapsed)}).\n')
+    print(f"\n{'Done!':-^80}")
+    print(f'Execution finished in {elapsed:.3f} seconds ({time.strftime("%-H hr, %-M min, %-S sec", time.gmtime(elapsed))}).\n')
